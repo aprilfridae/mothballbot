@@ -21,6 +21,16 @@ describe('migrate', () => {
   });
 });
 
+describe('migrating a Part 1 database', () => {
+  it('marks items that are already live on eBay as live instead of "researching"', async () => {
+    await db.query("INSERT INTO items (title, price_cents) VALUES ('old', 100)");
+    const id = (await db.query('SELECT id FROM items')).rows[0].id;
+    await repo.upsertListing(db, id, 'ebay', { externalId: '1', url: 'u', status: 'live', error: null });
+    await migrate(db);
+    expect((await repo.getItem(db, id))!.status).toBe('live');
+  });
+});
+
 describe('repo', () => {
   it('inserts a message only once per external id', async () => {
     const conv = await repo.upsertConversation(db, 'ebay', 'c1', 'sam_92');

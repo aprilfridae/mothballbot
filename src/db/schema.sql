@@ -65,6 +65,9 @@ ALTER TABLE items ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'researc
 ALTER TABLE items ADD COLUMN IF NOT EXISTS research JSONB;
 ALTER TABLE items ADD COLUMN IF NOT EXISTS telegram_message_id BIGINT;
 ALTER TABLE items ALTER COLUMN price_cents DROP NOT NULL;
+-- Items posted under Part 1 have no status yet; anything already live on eBay is live.
+UPDATE items SET status = 'live'
+  WHERE status = 'researching' AND id IN (SELECT item_id FROM listings WHERE status = 'live');
 
 -- Follow-ups: sale photo for Mom, retrying a failed tracking upload
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS sku TEXT;

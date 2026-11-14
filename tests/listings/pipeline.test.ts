@@ -196,6 +196,17 @@ describe('postItem', () => {
     expect(log.reports[0]).toContain('eBay login failed');
   });
 
+  it("labels a failure that isn't from eBay (e.g. a missing photo file) as the bot's own", async () => {
+    const item = await readyItem();
+    const { deps } = makeDeps({
+      readPhoto: async () => {
+        throw new Error("ENOENT: no such file or directory, open '/p/1.jpg'");
+      },
+    });
+    expect(await postItem(item.id, deps)).toBe('error');
+    expect((await repo.getListings(db, item.id))[0].error).toMatch(/^Couldn't post: ENOENT/);
+  });
+
   it('stops before posting when required item specifics are missing', async () => {
     const item = await readyItem();
     const { deps, log } = makeDeps();

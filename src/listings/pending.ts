@@ -82,6 +82,11 @@ export const REDRAFT_MESSAGE = "The bot restarted while drafting this one. Pleas
 export async function recoverInterrupted(db: Db): Promise<number[]> {
   const { rows } = await db.query("SELECT id, status FROM items WHERE status IN ('posting', 'researching') ORDER BY id");
   for (const { id, status } of rows) {
+    if (status === 'posting' && (await repo.getListings(db, id)).some((l) => l.status === 'live')) {
+      // It made it onto eBay; only the status update was lost.
+      await repo.setItemStatus(db, id, 'live');
+      continue;
+    }
     if (status === 'posting') {
       await repo.upsertListing(db, id, 'ebay', {
         externalId: null,

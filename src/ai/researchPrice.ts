@@ -31,10 +31,12 @@ const money = z.union([z.number(), z.string()]).transform((v, ctx) => {
   return Math.round(n * 100);
 });
 
+const optionalMoney = z.union([money, z.null()]).optional().transform((v) => v ?? null);
+
 const AnswerSchema = z.object({
-  suggested: money,
-  low: money,
-  high: money,
+  suggested: optionalMoney,
+  low: optionalMoney,
+  high: optionalMoney,
   confidence: z.enum(['low', 'medium', 'high']),
   comparables: z.array(z.unknown()),
   reasoning: z.string(),
@@ -91,39 +93,57 @@ export async function researchPrice(input: { details: string; draft: ListingDraf
   ];
 
   try {
-    let res = await client.messages.create({
-      model: MODEL,
-      max_tokens: 2000,
-      system: SYSTEM,
-      messages,
-      tools: [{ type: WEB_SEARCH_TOOL, name: 'web_search', max_uses: MAX_SEARCHES }],
-    });
-    // Server tools can pause a long turn; send it back unchanged to let it finish.
-    for (let i = 0; res.stop_reason === 'pause_turn' && i < MAX_CONTINUATIONS; i++) {
-      messages.push({ role: 'assistant', content: res.content });
-      res = await client.messages.create({
+    const request = (maxUses: number) =>
+      client.messages.create({
         model: MODEL,
         max_tokens: 2000,
         system: SYSTEM,
         messages,
-        tools: [{ type: WEB_SEARCH_TOOL, name: 'web_search', max_uses: MAX_SEARCHES }],
+        tools: [{ type: WEB_SEARCH_TOOL, name: 'web_search', max_uses: maxUses }],
       });
+    const searchesIn = (content: Array<{ type: string; name?: string }>) =>
+      content.filter((b) => b.type === 'server_tool_use' && b.name === 'web_search').length;
+
+    let res = await request(MAX_SEARCHES);
+    const seen = [...res.content];
+    let used = searchesIn(res.content as any);
+    // Server tools can pause a long turn; continue it, but with only the searches left so the total stays capped.
+    for (let i = 0; res.stop_reason === 'pause_turn' && i < MAX_CONTINUATIONS && used < MAX_SEARCHES; i++) {
+      messages.push({ role: 'assistant', content: res.content });
+      res = await request(MAX_SEARCHES - used);
+      seen.push(...res.content);
+      used += searchesIn(res.content as any);
     }
 
     const parsed = AnswerSchema.safeParse(answerJson(res.content));
     if (!parsed.success) return failed('the research did not return a usable answer.');
 
+    // Only trust links that actually came back from the searches (when we can see them).
+    const resultUrls = new Set(
+      seen
+        .filter((b: any) => b.type === 'web_search_tool_result' && Array.isArray(b.content))
+        .flatMap((b: any) => b.content.map((r: any) => r?.url).filter(Boolean)),
+    );
     const comparables = parsed.data.comparables
       .map((c) => ComparableSchema.safeParse(c))
       .filter((c) => c.success)
-      .slice(0, MAX_COMPARABLES)
-      .map(({ data }) => ({ title: data.title, priceCents: data.price, sold: data.sold, site: data.site, url: data.url }));
-    if (!comparables.length) return failed(parsed.data.reasoning || 'no matching items found.');
+      .map(({ data }) => ({ title: data.title, priceCents: data.price, sold: data.sold, site: data.site, url: data.url }))
+      .filter((c) => !resultUrls.size || resultUrls.has(c.url))
+      .slice(0, MAX_COMPARABLES);
+    const { suggested } = parsed.data;
+    if (!comparables.length || suggested === null) return failed(parsed.data.reasoning || 'no matching items found.');
+
+    // Make the range sensible: low ≤ high, and wide enough to include the suggestion.
+    let low = parsed.data.low ?? suggested;
+    let high = parsed.data.high ?? suggested;
+    if (low > high) [low, high] = [high, low];
+    low = Math.min(low, suggested);
+    high = Math.max(high, suggested);
 
     return {
-      suggestedCents: parsed.data.suggested,
-      lowCents: parsed.data.low,
-      highCents: parsed.data.high,
+      suggestedCents: suggested,
+      lowCents: low,
+      highCents: high,
       confidence: parsed.data.confidence,
       comparables,
       reasoning: parsed.data.reasoning,

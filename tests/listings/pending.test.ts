@@ -124,4 +124,12 @@ describe('recoverInterrupted', () => {
     expect(after.status).toBe('error');
     expect(after.research?.reasoning).toContain('post it again');
   });
+
+  it('marks a "posting" item live if its eBay listing actually went live before the restart', async () => {
+    const stuck = await item('posting');
+    await repo.upsertListing(db, stuck.id, 'ebay', { externalId: '9', url: 'https://www.ebay.com/itm/9', status: 'live', error: null });
+    await recoverInterrupted(db);
+    expect((await repo.getItem(db, stuck.id))!.status).toBe('live');
+    expect((await repo.getListings(db, stuck.id))[0].status).toBe('live');
+  });
 });

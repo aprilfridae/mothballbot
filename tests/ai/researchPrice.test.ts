@@ -159,3 +159,66 @@ describe('researchPrice', () => {
     expect(r.reasoning).toBe("Price research didn't work this time, so please set the price.");
   });
 });
+
+describe('researchPrice safeguards', () => {
+  const searches = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ type: 'server_tool_use', id: `s${i}`, name: 'web_search', input: { query: 'q' } }));
+
+  it('counts searches across a paused turn so the total stays at 5', async () => {
+    const calls: any[] = [];
+    await researchPrice(
+      input,
+      client(
+        [
+          { content: searches(4), stop_reason: 'pause_turn' },
+          answer({ suggested: 45, low: 30, high: 60, confidence: 'high', comparables: [comp(1)], reasoning: 'ok' }),
+        ],
+        calls,
+      ),
+    );
+    expect(calls[1].tools[0].max_uses).toBe(1);
+  });
+
+  it('stops continuing once all 5 searches are used', async () => {
+    const calls: any[] = [];
+    const r = await researchPrice(input, client([{ content: searches(5), stop_reason: 'pause_turn' }], calls));
+    expect(calls).toHaveLength(1);
+    expect(r.suggestedCents).toBeNull();
+  });
+
+  it('fixes a range that is backwards or does not contain the suggestion', async () => {
+    const r = await researchPrice(input, client([answer({ suggested: 80, low: 60, high: 30, confidence: 'medium', comparables: [comp(1)], reasoning: 'ok' })]));
+    expect([r.lowCents, r.suggestedCents, r.highCents]).toEqual([3000, 8000, 8000]);
+  });
+
+  it('keeps only comparables whose links came from the actual search results', async () => {
+    const r = await researchPrice(
+      input,
+      client([
+        {
+          content: [
+            ...searches(1),
+            {
+              type: 'web_search_tool_result',
+              tool_use_id: 's0',
+              content: [{ type: 'web_search_result', url: 'https://www.ebay.com/itm/1', title: 't' }],
+            },
+            {
+              type: 'text',
+              text: JSON.stringify({ suggested: 45, low: 30, high: 60, confidence: 'high', comparables: [comp(1), comp(2)], reasoning: 'ok' }),
+            },
+          ],
+        },
+      ]),
+    );
+    expect(r.comparables.map((c) => c.url)).toEqual(['https://www.ebay.com/itm/1']);
+  });
+
+  it("keeps the model's explanation when it finds nothing", async () => {
+    const r = await researchPrice(
+      input,
+      client([answer({ suggested: null, low: null, high: null, confidence: 'low', comparables: [], reasoning: 'This pattern rarely sells online.' })]),
+    );
+    expect(r.reasoning).toBe("Couldn't find comparables: This pattern rarely sells online.");
+  });
+});

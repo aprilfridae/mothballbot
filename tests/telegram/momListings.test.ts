@@ -116,6 +116,12 @@ describe('formatDraftForMom', () => {
     expect(text).toContain('⚠️ eBay said: eBay needs these item specifics: Color.');
   });
 
+  it("doesn't blame eBay for the bot's own posting failures", async () => {
+    const text = formatDraftForMom(await item({ status: 'error' }), "Couldn't post: ENOENT photo missing");
+    expect(text).toContain("⚠️ Couldn't post: ENOENT photo missing");
+    expect(text).not.toContain('eBay said');
+  });
+
   it('notes photos left out of the album', async () => {
     const text = formatDraftForMom(await item({ photos: ['/a.jpg', '/b.heic', '/c.heic'] }), null);
     expect(text).toContain('(+2 photos not shown)');

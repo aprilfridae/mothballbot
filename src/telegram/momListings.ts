@@ -60,6 +60,7 @@ function statusFooter(item: Item, listingError: string | null, liveUrl: string |
     case 'rejected':
       return '🗑 Rejected';
     case 'error':
+      if (listingError?.startsWith("Couldn't post")) return `⚠️ ${listingError} Try Post again; if it keeps failing, tell your son.`;
       return listingError
         ? `⚠️ eBay said: ${listingError} Tap Edit to fix, then Post again.`
         : `⚠️ ${item.research?.reasoning ?? 'Something went wrong.'}`;

@@ -123,7 +123,8 @@ export async function postItem(itemId: number, deps: PipelineDeps): Promise<Post
     await changed(deps, itemId);
     return 'live';
   } catch (e) {
-    const message = (e as Error).message;
+    // eBay's own messages are shown as "eBay said: …"; anything else is the bot's problem and says so.
+    const message = e instanceof EbayError ? e.message : `Couldn't post: ${(e as Error).message}`;
     await repo.upsertListing(deps.db, itemId, 'ebay', { externalId: null, url: null, status: 'error', error: message });
     await repo.setItemStatus(deps.db, itemId, 'error');
     if (e instanceof EbayError && e.isAuth) {
