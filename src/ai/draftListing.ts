@@ -25,7 +25,7 @@ export class DraftError extends Error {}
 
 export interface DraftInput {
   title: string;
-  priceCents: number;
+  priceCents: number | null;
   photos: { mime: string; data: Buffer }[];
 }
 
@@ -94,7 +94,10 @@ export async function draftListing(input: DraftInput, client: AnthropicLike): Pr
         role: 'user',
         content: [
           ...images,
-          { type: 'text', text: `Seller's title: ${input.title}\nPrice: $${(input.priceCents / 100).toFixed(2)}` },
+          {
+            type: 'text',
+            text: `Seller's notes:\n${input.title}\nPrice: ${input.priceCents === null ? 'not set yet' : `$${(input.priceCents / 100).toFixed(2)}`}`,
+          },
         ],
       },
     ],

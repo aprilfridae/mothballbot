@@ -1,7 +1,7 @@
 import { Client, Events, GatewayIntentBits, Partials, type Message } from 'discord.js';
 import type { Config } from '../config.js';
 import { guarded, type Reporter } from '../util/guard.js';
-import { handleButton, handleEditModal, handleIntakeMessage, type ListingDeps } from './newListing.js';
+import { handleIntakeMessage, type ListingDeps } from './newListing.js';
 
 export interface BotRoutes {
   listing: ListingDeps;
@@ -51,37 +51,6 @@ export function wireDiscord(client: Client, cfg: Config, routes: BotRoutes, repo
 
     if (msg.channel.isThread() && msg.channel.parentId === cfg.channels.buyers && routes.onThreadReply) {
       safe('thread reply', () => routes.onThreadReply!(msg));
-    }
-  });
-
-  client.on(Events.InteractionCreate, (interaction) => {
-    if (interaction.isButton()) {
-      safe('button', () =>
-        handleButton(
-          {
-            customId: interaction.customId,
-            userId: interaction.user.id,
-            deferUpdate: () => interaction.deferUpdate(),
-            editReply: (p) => interaction.editReply(p),
-            showModal: (m) => interaction.showModal(m),
-            update: (p) => interaction.update(p),
-          },
-          routes.listing,
-        ),
-      );
-    } else if (interaction.isModalSubmit() && interaction.isFromMessage()) {
-      safe('edit modal', () =>
-        handleEditModal(
-          {
-            customId: interaction.customId,
-            userId: interaction.user.id,
-            field: (id) => interaction.fields.getTextInputValue(id),
-            update: (p) => interaction.update(p),
-            reply: (p) => interaction.reply(p),
-          },
-          routes.listing,
-        ),
-      );
     }
   });
 

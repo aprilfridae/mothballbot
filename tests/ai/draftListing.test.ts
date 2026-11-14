@@ -79,3 +79,13 @@ describe('draftListing', () => {
     expect(calls[0].messages[0].content.filter((b: any) => b.type === 'image')).toHaveLength(0);
   });
 });
+
+describe('draftListing without a price', () => {
+  it('sends the seller details and says the price is not set', async () => {
+    const calls: any[] = [];
+    await draftListing({ ...input, title: 'Spode platter\ncrazing on back', priceCents: null }, fakeClient(JSON.stringify(good), calls));
+    const text = calls[0].messages[0].content.find((b: any) => b.type === 'text').text;
+    expect(text).toContain('crazing on back');
+    expect(text).toContain('Price: not set yet');
+  });
+});
