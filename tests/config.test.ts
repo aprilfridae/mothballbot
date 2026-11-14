@@ -17,6 +17,7 @@ const full = {
   EBAY_PAYMENT_POLICY_ID: 'p',
   EBAY_RETURN_POLICY_ID: 'r',
   EBAY_MERCHANT_LOCATION_KEY: 'home',
+  EBAY_USERNAME: 'mothball_shop',
   ANTHROPIC_API_KEY: 'k',
   TELEGRAM_TOKEN: 'tg',
   MOM_LINK_CODE: 'code123',
@@ -31,6 +32,7 @@ describe('loadConfig', () => {
     const c = loadConfig(full);
     expect(c.channels.buyers).toBe('3');
     expect(c.ebay.merchantLocationKey).toBe('home');
+    expect(c.ebay.username).toBe('mothball_shop');
     expect(c.photoDir).toBe('/data/photos');
   });
 });

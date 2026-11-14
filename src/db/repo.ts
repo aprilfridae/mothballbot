@@ -174,6 +174,11 @@ export async function findConversationByThread(db: Db, threadId: string): Promis
   return rows[0] ? toConversation(rows[0]) : null;
 }
 
+export async function messageExists(db: Db, externalId: string): Promise<boolean> {
+  const { rowCount } = await db.query('SELECT 1 FROM messages WHERE external_id = $1', [externalId]);
+  return rowCount === 1;
+}
+
 export async function insertMessageIfNew(
   db: Db,
   conversationId: number,

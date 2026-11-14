@@ -11,6 +11,7 @@ export interface Config {
     paymentPolicyId: string;
     returnPolicyId: string;
     merchantLocationKey: string;
+    username: string;
   };
   anthropicApiKey: string;
   telegramToken: string;
@@ -34,6 +35,7 @@ const REQUIRED = [
   'EBAY_PAYMENT_POLICY_ID',
   'EBAY_RETURN_POLICY_ID',
   'EBAY_MERCHANT_LOCATION_KEY',
+  'EBAY_USERNAME',
   'ANTHROPIC_API_KEY',
   'TELEGRAM_TOKEN',
   'MOM_LINK_CODE',
@@ -64,6 +66,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
       paymentPolicyId: e('EBAY_PAYMENT_POLICY_ID'),
       returnPolicyId: e('EBAY_RETURN_POLICY_ID'),
       merchantLocationKey: e('EBAY_MERCHANT_LOCATION_KEY'),
+      username: e('EBAY_USERNAME'),
     },
     anthropicApiKey: e('ANTHROPIC_API_KEY'),
     telegramToken: e('TELEGRAM_TOKEN'),
