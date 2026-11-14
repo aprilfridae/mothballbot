@@ -4,15 +4,25 @@ A Discord bot that runs the shop. Everything happens in Discord:
 
 | Channel | What happens there |
 |---|---|
-| `#new-listing` | Post photos with `Nike hoodie size L $35`. The bot drafts the listing with AI, and you tap **Post to eBay**. |
+| `#new-listing` | Post photos with what the item is and any details. The bot drafts the listing, researches what it sells for, and sends it to Mom. This channel shows its status: researching, sent to Mom, posted or rejected. |
 | `#buyers` (Forum) | Each buyer gets a thread named `buyer: sam_92 · eBay`. Type in the thread to reply to them. ✅ means it was delivered, ❌ means it failed and the bot says why. |
 | `#sales` | A line for every sale. |
 | `#to-ship` | The item, address and ship-by date for each sale. React 📦 when it's shipped. |
 | `#bot-status` | Warnings when something needs you, like an expired eBay login. |
 
-Mom gets each sale on **Telegram** with a **📦 Shipped** button. To add tracking, she replies to the sale message with the tracking number. The bot uploads it to eBay.
+Mom runs her side on **Telegram**: she approves, edits or rejects every listing, and gets each sale with a **📦 Shipped** button (or replies with the tracking number).
 
 Part 1 covers **eBay**. Etsy and Facebook Marketplace come in later parts. The design is in `docs/superpowers/specs/`.
+
+## How listings work
+
+1. **You:** in `#new-listing`, post photos and write what the item is on the first line, then everything you know: maker, pattern, era, marks, size, flaws. Add a photo of the backstamp or maker's mark when there is one. A price (`$45`) is optional. If you give one, it's used, and the research is shown next to it.
+2. **The bot** writes the listing (title, description, condition, item specifics). It then looks up what that exact item has **sold** for on eBay, Replacements, WorthPoint, Etsy, Ruby Lane and similar sites. That gives a suggested price, a range, and 3–5 comparable sales with links.
+3. **Mom** gets the photos and the draft on Telegram with **✅ Post to eBay**, **✏️ Edit** and **🗑 Reject**.
+   - **Edit** lets her pick a field and type the new value. Condition is picked with buttons.
+   - If no comparables were found, she sets the price before Post appears.
+   - If eBay rejects the listing, she sees why and can fix it and post again.
+4. **You** watch the status in `#new-listing`.
 
 ---
 
@@ -79,7 +89,7 @@ You'll get the policy IDs in step 5 below.
 
 ### 4. AI key
 
-Create an API key at <https://console.anthropic.com> and put it in `ANTHROPIC_API_KEY`. Drafts cost about a quarter of a cent each (Claude Haiku 5.5), so roughly 25¢ per 100 listings. Add ~$5 of credit and it will last a long time.
+Create an API key at <https://console.anthropic.com> and put it in `ANTHROPIC_API_KEY`. Each listing costs about 2–5¢: a quarter of a cent for the draft, plus price research with up to 5 web searches at 1¢ each (Claude Haiku 5.5). That's roughly $2–5 per 100 listings. Add ~$10 of credit to start.
 
 ### 5. Start it
 
@@ -100,8 +110,8 @@ Create an API key at <https://console.anthropic.com> and put it in `ANTHROPIC_AP
 
 ### Test it end to end
 
-1. Post one photo plus `test item $5` in `#new-listing`. The preview should appear.
-2. Tap **Post to eBay**. The link should open your live listing. End it on eBay afterwards.
+1. Post a photo plus `Test item, please ignore $5` in `#new-listing`. The status should go from "Researching price…" to "Sent to Mom".
+2. On Mom's Telegram, tap **✅ Post to eBay**. Her message and your status should both show the live link. End it on eBay afterwards.
 3. From a second eBay account, message about the item. Within about 2 minutes, a `buyer: …` thread should appear. Reply there, and the bot should react ✅.
 
 ## Updating
@@ -113,6 +123,9 @@ git pull && docker compose up -d --build
 ## Troubleshooting
 
 - **Nothing happens when I post in #new-listing.** Check that Message Content Intent is on and that `OWNER_DISCORD_ID` is your ID.
+- **Status says "Waiting for Mom to connect Telegram".** She hasn't tapped the start link yet. Drafts are sent as soon as she does.
+- **Every draft says "Couldn't find comparables".** Make sure web search is allowed for your organization in the Claude Console settings, since an admin can turn it off. Also check `docker compose logs app` for the research error.
+- **The suggested price looks wrong.** The research may have matched a different pattern or size. Mom can check the comparable links and change the price with Edit → Price. Adding a backstamp photo and the exact pattern name helps.
 - **"eBay needs these item specifics: …"** Tap **Edit** and add lines like `Color: Black` under Item specifics.
 - **`#bot-status` says the eBay login failed.** The refresh token expired or was revoked. Redo eBay steps 3–4, update `.env`, and run `docker compose up -d`.
 - **Mom didn't get a sale.** She hasn't tapped the start link yet. Once she does, unshipped sales from the last poll window are sent to her.

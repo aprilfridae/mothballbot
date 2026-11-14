@@ -5,10 +5,11 @@ import { ChannelType, Events, type Client } from 'discord.js';
 import { draftListing, type AnthropicLike } from './ai/draftListing.js';
 import { loadConfig, type Config } from './config.js';
 import { createDb, migrate, type Db } from './db/db.js';
-import type { Order } from './db/repo.js';
+import * as repo from './db/repo.js';
+import type { Item, Order } from './db/repo.js';
 import { createDiscordClient, wireDiscord } from './discord/bot.js';
 import { handleThreadReply, mirrorMessages, ThreadGoneError, type ThreadSink } from './discord/buyerThreads.js';
-import type { ListingDeps } from './discord/newListing.js';
+import { buildStatus, type ListingDeps } from './discord/newListing.js';
 import { makeReporter } from './discord/status.js';
 import { announceOrders, formatToShip, handleToShipReaction, sendPendingToMom } from './discord/toShip.js';
 import { startScheduler } from './jobs/schedule.js';
@@ -18,7 +19,10 @@ import { createEbay, type EbayClient } from './platforms/ebay/client.js';
 import { createListing, suggestCategory, uploadImage } from './platforms/ebay/listings.js';
 import { fetchNewMessages, sendReply } from './platforms/ebay/messages.js';
 import { createFulfillment, fetchNewOrders } from './platforms/ebay/orders.js';
-import { createMomBot } from './telegram/momBot.js';
+import { researchPrice } from './ai/researchPrice.js';
+import { recoverInterruptedPosts, sendPendingDrafts } from './listings/pending.js';
+import { createDraft, type PipelineDeps } from './listings/pipeline.js';
+import { createMomBot, MOM_CHAT_KEY, type MomBot } from './telegram/momBot.js';
 import { guarded } from './util/guard.js';
 
 function threadSink(client: Client, cfg: Config): ThreadSink {
@@ -47,11 +51,33 @@ async function sendTo(client: Client, channelId: string, text: string): Promise<
   return (await channel.send(text)).id;
 }
 
-function listingDeps(db: Db, cfg: Config, ebay: EbayClient, anthropic: AnthropicLike, report: (t: string) => Promise<void>): ListingDeps {
+function pipelineDeps(
+  db: Db,
+  cfg: Config,
+  ebay: EbayClient,
+  anthropic: AnthropicLike,
+  report: (t: string) => Promise<void>,
+  onChange: (item: Item) => Promise<void>,
+): PipelineDeps {
+  return {
+    db,
+    draft: (input) => draftListing(input, anthropic),
+    research: (input) => researchPrice(input, anthropic),
+    readPhoto: (path) => readFile(path),
+    ebay: {
+      uploadImage: (file) => uploadImage(ebay, file),
+      suggestCategory: (q) => suggestCategory(ebay, q),
+      createListing: (input) => createListing(ebay, cfg.ebay, input),
+    },
+    report,
+    onChange,
+  };
+}
+
+function listingDeps(db: Db, cfg: Config, pipeline: PipelineDeps): ListingDeps {
   return {
     db,
     ownerId: cfg.ownerDiscordId,
-    draft: (input) => draftListing(input, anthropic),
     downloadPhoto: async (url) => {
       const res = await fetch(url);
       if (!res.ok) throw new Error(`Couldn't download a photo from Discord (${res.status})`);
@@ -63,13 +89,33 @@ function listingDeps(db: Db, cfg: Config, ebay: EbayClient, anthropic: Anthropic
       await writeFile(path, data);
       return path;
     },
-    readPhoto: (path) => readFile(path),
-    ebay: {
-      uploadImage: (file) => uploadImage(ebay, file),
-      suggestCategory: (q) => suggestCategory(ebay, q),
-      createListing: (input) => createListing(ebay, cfg.ebay, input),
-    },
-    report,
+    createDraft: (itemId, photos, skipped) => createDraft(itemId, photos, skipped, pipeline),
+  };
+}
+
+/** Keeps your #new-listing status and Mom's Telegram draft in step with the item. */
+function viewUpdater(db: Db, discord: Client, cfg: Config, getMomBot: () => MomBot) {
+  return async (item: Item) => {
+    const momLinked = (await repo.getSetting(db, MOM_CHAT_KEY)) !== null;
+    if (item.discordMessageId) {
+      await guarded(
+        `Updating the status of item #${item.id}`,
+        async () => {
+          const channel = await discord.channels.fetch(cfg.channels.newListing);
+          if (!channel?.isTextBased()) return;
+          const msg = await channel.messages.fetch(item.discordMessageId!);
+          await msg.edit(buildStatus(item, await repo.getListings(db, item.id), momLinked));
+        },
+        async (t) => console.error(t),
+      );
+    }
+    const momBot = getMomBot();
+    if (item.status === 'awaiting_mom' && item.telegramMessageId === null) {
+      const id = await momBot.sendDraftToMom(item);
+      if (id !== null) await repo.setItemTelegramMessage(db, item.id, id);
+    } else if (item.telegramMessageId !== null) {
+      await momBot.refreshDraft(item);
+    }
   };
 }
 
@@ -83,14 +129,24 @@ async function main() {
   const discord = createDiscordClient();
   const report = makeReporter(discord, cfg.channels.botStatus);
 
-  // Mom's bot and the shipping path reference each other, so the bot is created first with a late-bound markShipped.
+  // Mom's bot, the shipping path and the listing pipeline reference each other, so some links are bound late.
   let shipDeps: ShipDeps;
-  const momBot = createMomBot(cfg.telegramToken, {
-    db,
-    linkCode: cfg.momLinkCode,
-    markShipped: (orderId, by, tracking) => markShipped(orderId, by, tracking, shipDeps),
-    onLinked: () => sendPendingToMom({ db, notifyMom: (o) => momBot.notifyMom(o), report }),
-  });
+  let momBot: MomBot;
+  const pipeline = pipelineDeps(db, cfg, ebay, anthropic, report, viewUpdater(db, discord, cfg, () => momBot));
+  const sendDrafts = () => sendPendingDrafts({ db, sendDraftToMom: (i) => momBot.sendDraftToMom(i), report });
+  momBot = createMomBot(
+    cfg.telegramToken,
+    {
+      db,
+      linkCode: cfg.momLinkCode,
+      markShipped: (orderId, by, tracking) => markShipped(orderId, by, tracking, shipDeps),
+      onLinked: async () => {
+        await sendPendingToMom({ db, notifyMom: (o) => momBot.notifyMom(o), report });
+        await sendDrafts();
+      },
+    },
+    { db, pipeline },
+  );
   shipDeps = {
     db,
     fulfill: { ebay: (o: Order, t, c) => createFulfillment(ebay, o, t, c) },
@@ -105,7 +161,7 @@ async function main() {
   };
 
   wireDiscord(discord, cfg, {
-    listing: listingDeps(db, cfg, ebay, anthropic, report),
+    listing: listingDeps(db, cfg, pipeline),
     onThreadReply: (msg) =>
       handleThreadReply(
         {
@@ -140,6 +196,15 @@ async function main() {
     momBot.start((e) =>
       void report(`Mom's Telegram bot stopped: ${(e as Error)?.message ?? e}. Check TELEGRAM_TOKEN, then restart with \`docker compose restart app\`.`),
     );
+    await guarded(
+      'Recovering interrupted listings',
+      async () => {
+        const stuck = await recoverInterruptedPosts(db);
+        for (const id of stuck) await pipeline.onChange((await repo.getItem(db, id))!);
+        if (stuck.length) await report(`The bot restarted while posting ${stuck.length} listing(s). Mom was asked to check eBay before posting again.`);
+      },
+      report,
+    );
     const boss = await startScheduler(cfg.databaseUrl, [
       {
         name: 'poll-ebay-messages',
@@ -167,6 +232,7 @@ async function main() {
             report,
           });
           await guarded('Sending sales to Mom', () => sendPendingToMom({ db, notifyMom: (o) => momBot.notifyMom(o), report }), report);
+          await guarded('Sending listing drafts to Mom', sendDrafts, report);
         },
       },
     ]);
