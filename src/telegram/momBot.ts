@@ -148,6 +148,8 @@ export interface MomBot {
   markMessage(order: Order, label: string): Promise<void>;
   /** Starts long polling; a polling crash (bad token, second instance) is passed to onError instead of killing the app. */
   start(onError: (e: unknown) => void): void;
+  /** The bot's @username (for Mom's start link). */
+  username(): Promise<string>;
   stop(): Promise<void>;
 }
 
@@ -337,5 +339,6 @@ export function createMomBot(token: string, deps: MomDeps, listings: MomListingD
       bot.start({ allowed_updates: ['message', 'callback_query'] }).catch(onError);
     },
     stop: () => bot.stop(),
+    username: async () => (await bot.api.getMe()).username,
   };
 }

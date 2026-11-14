@@ -1,5 +1,5 @@
 import type { ListingDraft } from '../../ai/draftListing.js';
-import type { Config } from '../../config.js';
+import type { EbayConfig } from '../../config.js';
 import { API, MEDIA_API, EbayError, type EbayClient } from './client.js';
 import type { CategoryCondition } from './conditions.js';
 
@@ -69,7 +69,7 @@ export interface EbayListingInput {
 
 export async function createListing(
   ebay: EbayClient,
-  cfg: Config['ebay'],
+  cfg: EbayConfig,
   item: EbayListingInput,
 ): Promise<{ listingId: string; url: string }> {
   const { draft } = item;

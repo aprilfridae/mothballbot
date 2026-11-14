@@ -26,6 +26,14 @@ Part 1 covers **eBay**. Etsy and Facebook Marketplace come in later parts. The d
 
 ---
 
+## Quick start
+
+1. Fill in the **Required** section of `.env` (see `.env.example`).
+2. Invite the Discord bot to your server. The bot prints the invite link in `docker compose logs app` if it isn't in one yet.
+3. Run `docker compose up -d --build`.
+
+On first start, the bot treats the server owner as you and creates its channels. It then posts Mom's Telegram link in `#bot-status`. eBay can be added later: fill in the eBay section and run `docker compose up -d`. The detailed steps follow.
+
 ## Setup (one time, about 45 minutes)
 
 You'll fill in `.env` as you go:

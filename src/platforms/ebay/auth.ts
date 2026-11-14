@@ -1,4 +1,4 @@
-import type { Config } from '../../config.js';
+import type { EbayConfig } from '../../config.js';
 import { EbayError } from './errors.js';
 
 export const TOKEN_URL = 'https://api.ebay.com/identity/v1/oauth2/token';
@@ -12,7 +12,7 @@ export const SCOPES = [
   'https://api.ebay.com/oauth/api_scope/commerce.message',
 ];
 
-export type EbayCreds = Pick<Config['ebay'], 'clientId' | 'clientSecret' | 'refreshToken'>;
+export type EbayCreds = Pick<EbayConfig, 'clientId' | 'clientSecret' | 'refreshToken'>;
 
 export function createTokenSource(creds: EbayCreds, fetchFn: typeof fetch) {
   let cached: { token: string; expiresAt: number } | null = null;

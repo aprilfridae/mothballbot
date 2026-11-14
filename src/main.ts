@@ -11,11 +11,12 @@ import { createDiscordClient, wireDiscord } from './discord/bot.js';
 import { handleThreadReply, mirrorMessages, ThreadGoneError, type ThreadSink } from './discord/buyerThreads.js';
 import { buildStatus, type ListingDeps } from './discord/newListing.js';
 import { makeReporter } from './discord/status.js';
+import { ensureDiscordSetup } from './discord/setup.js';
 import { announceOrders, formatToShip, handleToShipReaction, sendPendingToMom } from './discord/toShip.js';
 import { startScheduler } from './jobs/schedule.js';
 import { runPoll } from './jobs/schedule.js';
 import { markShipped, type ShipDeps } from './orders/markShipped.js';
-import { createEbay, type EbayClient } from './platforms/ebay/client.js';
+import { createEbay, EbayError, type EbayClient } from './platforms/ebay/client.js';
 import { createListing, suggestCategory, uploadImage } from './platforms/ebay/listings.js';
 import { fetchNewMessages, sendReply } from './platforms/ebay/messages.js';
 import { createFulfillment, fetchNewOrders } from './platforms/ebay/orders.js';
@@ -51,10 +52,16 @@ async function sendTo(client: Client, channelId: string, text: string): Promise<
   return (await channel.send(text)).id;
 }
 
+const EBAY_NOT_CONNECTED = "eBay isn't connected yet (waiting on eBay developer approval). The draft is saved; post it once eBay is set up.";
+
+function notConnected(): never {
+  throw new EbayError(0, EBAY_NOT_CONNECTED, false);
+}
+
 function pipelineDeps(
   db: Db,
   cfg: Config,
-  ebay: EbayClient,
+  ebay: EbayClient | null,
   anthropic: AnthropicLike,
   report: (t: string) => Promise<void>,
   onChange: (item: Item) => Promise<void>,
@@ -65,9 +72,9 @@ function pipelineDeps(
     research: (input) => researchPrice(input, anthropic),
     readPhoto: (path) => readFile(path),
     ebay: {
-      uploadImage: (file) => uploadImage(ebay, file),
-      suggestCategory: (q) => suggestCategory(ebay, q),
-      createListing: (input) => createListing(ebay, cfg.ebay, input),
+      uploadImage: (file) => (ebay ? uploadImage(ebay, file) : notConnected()),
+      suggestCategory: (q) => (ebay ? suggestCategory(ebay, q) : notConnected()),
+      createListing: (input) => (ebay && cfg.ebay ? createListing(ebay, cfg.ebay, input) : notConnected()),
     },
     report,
     onChange,
@@ -116,10 +123,18 @@ async function main() {
   const db = createDb(cfg.databaseUrl);
   await migrate(db);
 
-  const ebay = createEbay(cfg.ebay);
-  const anthropic = new Anthropic({ apiKey: cfg.anthropicApiKey }) as unknown as AnthropicLike;
+  // Log in first: the bot finds its server, owner and channels before anything else is wired.
   const discord = createDiscordClient();
+  const ready = new Promise<Client<true>>((resolve) => discord.once(Events.ClientReady, resolve));
+  await discord.login(cfg.discordToken);
+  const client = await ready;
+  console.log(`Discord connected as ${client.user.tag}`);
+  const setup = await ensureDiscordSetup(client, cfg);
   const report = makeReporter(discord, cfg.channels.botStatus);
+  if (setup.created.length) await report(`Set up ${setup.created.join(', ')} in ${setup.guild.name}. 👋`);
+
+  const ebay = cfg.ebay ? createEbay(cfg.ebay) : null;
+  const anthropic = new Anthropic({ apiKey: cfg.anthropicApiKey }) as unknown as AnthropicLike;
 
   // Mom's bot, the shipping path and the listing pipeline reference each other, so some links are bound late.
   let shipDeps: ShipDeps;
@@ -140,6 +155,7 @@ async function main() {
       linkCode: cfg.momLinkCode,
       markShipped: (orderId, by, tracking) => markShipped(orderId, by, tracking, shipDeps),
       onLinked: async () => {
+        await report("Mom is connected on Telegram. ✅");
         await sendPendingToMom({ db, notifyMom: (o) => momBot.notifyMom(o), report });
         await sendDrafts();
       },
@@ -148,7 +164,7 @@ async function main() {
   );
   shipDeps = {
     db,
-    fulfill: { ebay: (o: Order, t, c) => createFulfillment(ebay, o, t, c) },
+    fulfill: { ebay: (o: Order, t, c) => (ebay ? createFulfillment(ebay, o, t, c) : notConnected()) },
     markDiscord: async (o, label) => {
       if (!o.discordMessageId) return;
       const channel = await discord.channels.fetch(cfg.channels.toShip);
@@ -159,66 +175,93 @@ async function main() {
     markTelegram: (o, label) => momBot.markMessage(o, label),
   };
 
-  wireDiscord(discord, cfg, {
-    listing: listingDeps(db, cfg, pipeline),
-    onThreadReply: (msg) =>
-      handleThreadReply(
-        {
-          id: msg.id,
-          threadId: msg.channelId,
-          authorId: msg.author.id,
-          content: msg.content,
-          attachmentCount: msg.attachments.size,
-          react: async (e) => {
-            await msg.react(e);
+  wireDiscord(
+    discord,
+    cfg,
+    {
+      listing: listingDeps(db, cfg, pipeline),
+      onThreadReply: (msg) =>
+        handleThreadReply(
+          {
+            id: msg.id,
+            threadId: msg.channelId,
+            authorId: msg.author.id,
+            content: msg.content,
+            attachmentCount: msg.attachments.size,
+            react: async (e) => {
+              await msg.react(e);
+            },
+            reply: async (t) => {
+              await msg.reply(t);
+            },
           },
-          reply: async (t) => {
-            await msg.reply(t);
-          },
-        },
-        { db, ownerId: cfg.ownerDiscordId, send: { ebay: (conv, text) => sendReply(ebay, conv, text) } },
-      ),
-    onToShipReaction: (messageId, emoji) =>
-      handleToShipReaction(messageId, emoji, {
-        db,
-        markShipped: (id, by, tracking) => markShipped(id, by, tracking, shipDeps),
-      }),
-  }, report);
+          { db, ownerId: cfg.ownerDiscordId, send: { ebay: (conv, text) => (ebay ? sendReply(ebay, conv, text) : notConnected()) } },
+        ),
+      onToShipReaction: (messageId, emoji) =>
+        handleToShipReaction(messageId, emoji, {
+          db,
+          markShipped: (id, by, tracking) => markShipped(id, by, tracking, shipDeps),
+        }),
+    },
+    report,
+  );
 
   process.on('unhandledRejection', (e) => {
     console.error('Unhandled error:', e);
     void report(`Unexpected error: ${(e as Error)?.message ?? e}`);
   });
 
-  const sink = threadSink(discord, cfg);
-  discord.once(Events.ClientReady, async (c) => {
-    console.log(`Discord connected as ${c.user.tag}`);
-    momBot.start((e) =>
-      void report(`Mom's Telegram bot stopped: ${(e as Error)?.message ?? e}. Check TELEGRAM_TOKEN, then restart with \`docker compose restart app\`.`),
-    );
+  momBot.start((e) =>
+    void report(`Mom's Telegram bot stopped: ${(e as Error)?.message ?? e}. Check TELEGRAM_TOKEN, then restart with \`docker compose restart app\`.`),
+  );
+  if ((await repo.getSetting(db, MOM_CHAT_KEY)) === null) {
     await guarded(
-      'Recovering interrupted listings',
+      "Making Mom's Telegram link",
       async () => {
-        const stuck = await recoverInterrupted(db);
-        for (const id of stuck) await pipeline.onChange((await repo.getItem(db, id))!);
-        if (stuck.length) await report(`The bot restarted while ${stuck.length} listing(s) were being drafted or posted. Their status in #new-listing says what to do.`);
+        const username = await momBot.username();
+        await report(`Send this link to Mom so she can connect on Telegram: https://t.me/${username}?start=${encodeURIComponent(cfg.momLinkCode)}`);
       },
       report,
     );
-    const boss = await startScheduler(cfg.databaseUrl, [
+  }
+  if (!ebay) await report(EBAY_NOT_CONNECTED.replace('The draft is saved; post it once eBay is set up.', 'Listings can be drafted and reviewed by Mom; Post, buyer messages and sales start once the eBay keys are in .env.'));
+
+  await guarded(
+    'Recovering interrupted listings',
+    async () => {
+      const stuck = await recoverInterrupted(db);
+      for (const id of stuck) await pipeline.onChange((await repo.getItem(db, id))!);
+      if (stuck.length) await report(`The bot restarted while ${stuck.length} listing(s) were being drafted or posted. Their status in #new-listing says what to do.`);
+    },
+    report,
+  );
+
+  const sink = threadSink(discord, cfg);
+  const jobs = [
+    {
+      name: 'sweep-mom',
+      run: async () => {
+        await guarded('Sending sales to Mom', () => sendPendingToMom({ db, notifyMom: (o) => momBot.notifyMom(o), report }), report);
+        await guarded('Sending listing drafts to Mom', sendDrafts, report);
+      },
+    },
+  ];
+  if (ebay && cfg.ebay) {
+    const ebayCfg = cfg.ebay;
+    jobs.push(
       {
         name: 'poll-ebay-messages',
         run: () =>
           runPoll(db, 'poll-ebay-messages', {
-            fetch: (since) => fetchNewMessages(ebay, cfg.ebay.username, since),
+            fetch: (since) => fetchNewMessages(ebay, ebayCfg.username, since),
             handle: (msgs) => mirrorMessages(db, 'ebay', msgs, sink),
             report,
           }),
       },
       {
         name: 'poll-ebay-orders',
-        run: async () => {
-          await runPoll(db, 'poll-ebay-orders', {
+        run: () =>
+          runPoll(db, 'poll-ebay-orders', {
             fetch: (since) => fetchNewOrders(ebay, since),
             handle: (orders) =>
               announceOrders('ebay', orders, {
@@ -230,24 +273,20 @@ async function main() {
                 notifyMom: (o) => momBot.notifyMom(o),
               }),
             report,
-          });
-          await guarded('Sending sales to Mom', () => sendPendingToMom({ db, notifyMom: (o) => momBot.notifyMom(o), report }), report);
-          await guarded('Sending listing drafts to Mom', sendDrafts, report);
-        },
+          }),
       },
-    ]);
+    );
+  }
+  const boss = await startScheduler(cfg.databaseUrl, jobs);
 
-    const shutdown = async () => {
-      console.log('Shutting down…');
-      await Promise.allSettled([boss.stop(), momBot.stop(), discord.destroy()]);
-      await db.end();
-      process.exit(0);
-    };
-    process.once('SIGTERM', shutdown);
-    process.once('SIGINT', shutdown);
-  });
-
-  await discord.login(cfg.discordToken);
+  const shutdown = async () => {
+    console.log('Shutting down…');
+    await Promise.allSettled([boss.stop(), momBot.stop(), discord.destroy()]);
+    await db.end();
+    process.exit(0);
+  };
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', shutdown);
 }
 
 main().catch((e) => {
