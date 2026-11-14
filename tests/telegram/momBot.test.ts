@@ -150,3 +150,38 @@ describe('linking triggers pending alerts', () => {
     expect(linked).toBe(1);
   });
 });
+
+import { routeMomText } from '../../src/telegram/momBot.js';
+import { EDITING_KEY } from '../../src/telegram/momListings.js';
+
+describe('routeMomText', () => {
+  const listing = (calls: string[]) => async (_chat: number, text: string) => (calls.push(text), { answer: 'Title updated ✅' });
+
+  it('treats a reply to a sale message as shipping, even while a listing edit is active', async () => {
+    const o = await linkedOrder();
+    await repo.setSetting(db, EDITING_KEY, JSON.stringify({ itemId: 1, field: 'title' }));
+    const { d, shipped } = deps();
+    const listingCalls: string[] = [];
+    const r = await routeMomText(MOM, 777, '1Z999AA10123456784', d, listing(listingCalls));
+    expect(shipped).toEqual([{ orderId: o.id, by: 'mom', tracking: '1Z999AA10123456784' }]);
+    expect(listingCalls).toEqual([]);
+    expect(r).toEqual({ answer: expect.stringContaining('Got it') });
+    expect(await repo.getSetting(db, EDITING_KEY)).not.toBeNull();
+  });
+
+  it('sends other text to the active listing edit', async () => {
+    await linkedOrder();
+    const { d } = deps();
+    const listingCalls: string[] = [];
+    const r = await routeMomText(MOM, null, 'New title', d, listing(listingCalls));
+    expect(listingCalls).toEqual(['New title']);
+    expect(r).toEqual({ answer: 'Title updated ✅' });
+  });
+
+  it('falls back to the sale hint when nothing else applies', async () => {
+    await linkedOrder();
+    const { d } = deps();
+    const r = await routeMomText(MOM, null, 'hi', d, async () => null);
+    expect(r?.answer).toContain('reply to the sale message');
+  });
+});
