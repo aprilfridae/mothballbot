@@ -192,6 +192,13 @@ describe('buildStatus', () => {
     expect(text).not.toContain('Waiting on Mom');
   });
 
+  it('lists skipped files in the footer', async () => {
+    const { item, listings } = await itemWith({ status: 'awaiting_mom', priceCents: 4500, research, sentToMom: true });
+    await repo.updateItemDraft(db, item.id, { title: 't', description: 'd', condition: 'NEW', brand: null, aspects: {}, categoryQuery: 'q', skipped: ['receipt.pdf'] });
+    const p = buildStatus((await repo.getItem(db, item.id))!, listings, true);
+    expect(embedOf(p).footer.text).toContain('skipped: receipt.pdf');
+  });
+
   it('never has buttons', async () => {
     const { item, listings } = await itemWith({ status: 'awaiting_mom', priceCents: 4500, research });
     expect(buildStatus(item, listings, true).components).toEqual([]);

@@ -25,7 +25,9 @@ import {
   type MomListingDeps,
 } from './momListings.js';
 
-export const MOM_CHAT_KEY = 'telegram.momChatId';
+import { MOM_CHAT_KEY } from './keys.js';
+
+export { MOM_CHAT_KEY } from './keys.js';
 
 export interface MomDeps {
   db: Db;
@@ -128,6 +130,9 @@ export async function routeMomText(
   }
   const action = await listingText(chatId, replyToId, text);
   if (action) return action;
+  if (replyToId !== null && (await repo.findItemByTelegramMessage(deps.db, replyToId))) {
+    return { answer: 'To change this listing, tap ✏️ Edit on it and pick what to change.' };
+  }
   const answer = await handleMomReply(chatId, replyToId, text, deps);
   return answer ? { answer } : null;
 }
@@ -209,38 +214,56 @@ export function createMomBot(token: string, deps: MomDeps, listings: MomListingD
 
   bot.on('callback_query:data', async (ctx) => {
     const chatId = ctx.chat?.id ?? ctx.from.id;
-    const early = (await repo.getSetting(deps.db, MOM_CHAT_KEY)) === String(chatId) ? earlyAnswer(ctx.callbackQuery.data) : null;
-    if (early) await ctx.answerCallbackQuery({ text: early });
-    try {
-      const listingAction = await handleListingCallback(chatId, ctx.callbackQuery.data, listings);
-      if (listingAction) {
-        if (!early) await ctx.answerCallbackQuery(listingAction.answer ? { text: listingAction.answer } : undefined);
-        // The tap was already answered; outcomes without a refreshed draft (e.g. "set a price first") go as a message.
-        else if (listingAction.answer && listingAction.refresh === undefined) await bot.api.sendMessage(chatId, listingAction.answer);
-        await perform(chatId, listingAction);
-        return;
+    const data = ctx.callbackQuery.data;
+    const early = (await repo.getSetting(deps.db, MOM_CHAT_KEY)) === String(chatId) ? earlyAnswer(data) : null;
+
+    const handle = async () => {
+      try {
+        const listingAction = await handleListingCallback(chatId, data, listings);
+        if (listingAction) {
+          if (!early) await ctx.answerCallbackQuery(listingAction.answer ? { text: listingAction.answer } : undefined);
+          // The tap was already answered; outcomes without a refreshed draft (e.g. "set a price first") go as a message.
+          else if (listingAction.answer && listingAction.refresh === undefined) await bot.api.sendMessage(chatId, listingAction.answer);
+          await perform(chatId, listingAction);
+          return;
+        }
+        const answer = await handleShippedCallback(chatId, data, deps);
+        await ctx.answerCallbackQuery(answer ? { text: answer } : undefined);
+      } catch (e) {
+        // Always answer, so Mom never sees an endless spinner.
+        if (early) await bot.api.sendMessage(chatId, 'Something went wrong. Try again in a minute.').catch(() => {});
+        else await ctx.answerCallbackQuery({ text: 'Something went wrong. Try again in a minute.' }).catch(() => {});
+        console.error('Telegram button failed:', e);
       }
-      const answer = await handleShippedCallback(chatId, ctx.callbackQuery.data, deps);
-      await ctx.answerCallbackQuery(answer ? { text: answer } : undefined);
-    } catch (e) {
-      // Always answer, so Mom never sees an endless spinner.
-      if (early) await bot.api.sendMessage(chatId, 'Something went wrong. Try again in a minute.').catch(() => {});
-      else await ctx.answerCallbackQuery({ text: 'Something went wrong. Try again in a minute.' }).catch(() => {});
-      throw e;
+    };
+
+    if (early) {
+      await ctx.answerCallbackQuery({ text: early });
+      // Posting uploads photos for a while; run it in the background so Mom's other taps aren't stuck behind it.
+      void handle();
+    } else {
+      await handle();
     }
   });
 
   bot.on('message:text', async (ctx) => {
-    const action = await routeMomText(
-      ctx.chat.id,
-      ctx.message.reply_to_message?.message_id ?? null,
-      ctx.message.text,
-      deps,
-      (chatId, replyToId, text) => handleListingText(chatId, replyToId, text, listings),
-    );
-    if (!action) return;
-    if (action.answer) await ctx.reply(action.answer, { reply_parameters: { message_id: ctx.message.message_id } });
-    await perform(ctx.chat.id, { ...action, answer: undefined });
+    try {
+      const action = await routeMomText(
+        ctx.chat.id,
+        ctx.message.reply_to_message?.message_id ?? null,
+        ctx.message.text,
+        deps,
+        (chatId, replyToId, text) => handleListingText(chatId, replyToId, text, listings),
+      );
+      if (!action) return;
+      if (action.answer) await ctx.reply(action.answer, { reply_parameters: { message_id: ctx.message.message_id } });
+      await perform(ctx.chat.id, { ...action, answer: undefined });
+    } catch (e) {
+      console.error('Handling a Telegram message failed:', e);
+      if ((await repo.getSetting(deps.db, MOM_CHAT_KEY)) === String(ctx.chat.id)) {
+        await ctx.reply("Sorry, that didn't work. Try again in a minute.").catch(() => {});
+      }
+    }
   });
 
   bot.catch((err) => console.error('Telegram bot error:', err.error));

@@ -58,12 +58,18 @@ function statusLine(item: Item, listings: ListingRow[], momLinked: boolean): str
   }
 }
 
+function footerText(item: Item): string {
+  const photos = `${item.photos.length} photo${item.photos.length === 1 ? '' : 's'}`;
+  const skipped = ((item.draft as { skipped?: string[] } | null)?.skipped ?? []).filter((n) => !n.startsWith('('));
+  return `Item #${item.id} · ${photos}${skipped.length ? ` · skipped: ${skipped.join(', ')}` : ''}`.slice(0, 2048);
+}
+
 /** Your read-only view of a listing in #new-listing. Mom makes every decision on Telegram. */
 export function buildStatus(item: Item, listings: ListingRow[], momLinked: boolean) {
   const embed = new EmbedBuilder()
     .setTitle(item.title.slice(0, 256))
     .setDescription(statusLine(item, listings, momLinked).slice(0, 4096))
-    .setFooter({ text: `Item #${item.id} · ${item.photos.length} photo${item.photos.length === 1 ? '' : 's'}` });
+    .setFooter({ text: footerText(item) });
   return { content: '', embeds: [embed.toJSON()], components: [] };
 }
 

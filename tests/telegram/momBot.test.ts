@@ -203,4 +203,13 @@ describe('routeMomText', () => {
     const r = await routeMomText(MOM, null, 'hi', d, async () => null);
     expect(r?.answer).toContain('reply to the sale message');
   });
+
+  it('explains how to change a listing when Mom replies to a draft without tapping Edit', async () => {
+    await linkedOrder();
+    const item = await repo.insertItem(db, { title: 't', details: 'd', priceCents: 1, photos: [] });
+    await repo.setItemTelegramMessage(db, item.id, 4242);
+    const { d } = deps();
+    const r = await routeMomText(MOM, 4242, 'make it $50', d, async () => null);
+    expect(r?.answer).toContain('tap ✏️ Edit');
+  });
 });

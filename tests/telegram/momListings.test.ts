@@ -122,6 +122,23 @@ describe('formatDraftForMom', () => {
     expect(text).not.toContain('eBay said');
   });
 
+  it('shows notes about skipped files and photos the AI could not see', async () => {
+    const i = await item();
+    await repo.updateItemDraft(db, i.id, { ...draft, skipped: ['receipt.pdf', "(AI couldn't view HEIC photos, so double-check the details)"] });
+    const text = formatDraftForMom((await repo.getItem(db, i.id))!, null);
+    expect(text).toContain('Not included: receipt.pdf');
+    expect(text).toContain("AI couldn't view HEIC photos");
+  });
+
+  it('always keeps the status line, even with enormous item specifics', async () => {
+    const i = await item({ status: 'error' });
+    const aspects = Object.fromEntries(Array.from({ length: 400 }, (_, n) => [`Spec${n}`, ['x'.repeat(20)]]));
+    await repo.updateItemDraft(db, i.id, { ...draft, aspects, skipped: [] });
+    const text = formatDraftForMom((await repo.getItem(db, i.id))!, 'eBay needs Color.');
+    expect(text.length).toBeLessThanOrEqual(4096);
+    expect(text).toContain('⚠️ eBay said: eBay needs Color.');
+  });
+
   it('notes photos left out of the album', async () => {
     const text = formatDraftForMom(await item({ photos: ['/a.jpg', '/b.heic', '/c.heic'] }), null);
     expect(text).toContain('(+2 photos not shown)');
@@ -196,6 +213,17 @@ describe('handleListingCallback', () => {
     expect(r?.prompt).toContain('Send the new price');
     expect(r?.prompt).toContain('$45.00');
     expect(JSON.parse((await repo.getSetting(db, EDITING_KEY))!)).toEqual({ itemId: i.id, field: 'price' });
+  });
+
+  it("Back on one draft doesn't cancel an edit started on another", async () => {
+    const a = await item();
+    const b = await item();
+    const { d } = deps();
+    await handleListingCallback(MOM, `lfield:${a.id}:title`, d);
+    await handleListingCallback(MOM, `lback:${b.id}`, d);
+    expect(JSON.parse((await repo.getSetting(db, EDITING_KEY))!).itemId).toBe(a.id);
+    await handleListingCallback(MOM, `lback:${a.id}`, d);
+    expect(await repo.getSetting(db, EDITING_KEY)).toBeNull();
   });
 
   it('rejects, and then explains that the listing is rejected', async () => {

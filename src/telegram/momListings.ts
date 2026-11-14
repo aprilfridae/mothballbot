@@ -11,7 +11,7 @@ import {
   type EditableField,
 } from '../listings/edit.js';
 import { postItem, rejectItem, type PipelineDeps } from '../listings/pipeline.js';
-import { MOM_CHAT_KEY } from './momBot.js';
+import { MOM_CHAT_KEY } from './keys.js';
 
 export const EDITING_KEY = 'telegram.editing';
 const MAX_TEXT = 4096;
@@ -90,7 +90,8 @@ export function formatDraftForMom(item: Item, listingError: string | null, liveU
   if (stored) head.push(`Condition: ${CONDITION_LABEL[stored.draft.condition]}`);
 
   const tail: string[] = [];
-  const specifics = stored ? formatSpecifics(stored.draft.aspects) : '';
+  let specifics = stored ? formatSpecifics(stored.draft.aspects) : '';
+  if (specifics.length > 800) specifics = specifics.slice(0, 799) + '…';
   if (specifics) tail.push('', 'Item specifics:', specifics);
   if (r?.comparables.length) {
     tail.push('', 'Comparables:');
@@ -99,17 +100,23 @@ export function formatDraftForMom(item: Item, listingError: string | null, liveU
     }
   }
   if (r?.reasoning) tail.push('', `Why: ${r.reasoning.slice(0, 500)}`);
+  const skippedFiles = (stored?.skipped ?? []).filter((n) => !n.startsWith('('));
+  const notes = (stored?.skipped ?? []).filter((n) => n.startsWith('('));
+  if (skippedFiles.length) tail.push(`Not included: ${skippedFiles.join(', ').slice(0, 300)}`);
+  tail.push(...notes);
   const hidden = item.photos.length - albumPhotos(item).length;
   if (hidden > 0) tail.push(`(+${hidden} photo${hidden === 1 ? '' : 's'} not shown)`);
-  const footer = statusFooter(item, listingError, liveUrl);
-  if (footer) tail.push('', footer);
 
+  // The status line always survives; the description gives way first, then anything else.
+  const footer = statusFooter(item, listingError, liveUrl);
+  const budget = MAX_TEXT - (footer ? footer.length + 2 : 0);
   const fixed = head.join('\n').length + tail.join('\n').length + 4;
   let description = stored?.draft.description ?? '';
-  const room = MAX_TEXT - fixed;
+  const room = budget - fixed;
   if (description.length > room) description = room > 1 ? description.slice(0, room - 1) + '…' : '';
 
-  return [...head, '', description, ...tail].join('\n').slice(0, MAX_TEXT);
+  const body = [...head, '', description, ...tail].join('\n').slice(0, budget);
+  return footer ? `${body}\n\n${footer}` : body;
 }
 
 export function draftKeyboard(item: Item): KeyRows {
@@ -180,9 +187,12 @@ export async function handleListingCallback(chatId: number, data: string, deps: 
     case 'ledit':
       if (!EDITABLE.includes(item.status)) return { answer: already(item) };
       return { keyboard: 'fields', itemId };
-    case 'lback':
-      await repo.deleteSetting(deps.db, EDITING_KEY);
+    case 'lback': {
+      // Only drop an edit that belongs to this draft.
+      const raw = await repo.getSetting(deps.db, EDITING_KEY);
+      if (raw && (JSON.parse(raw) as EditState).itemId === itemId) await repo.deleteSetting(deps.db, EDITING_KEY);
       return { keyboard: 'draft', itemId };
+    }
     case 'lfield': {
       if (!EDITABLE.includes(item.status)) return { answer: already(item) };
       const field = arg as EditableField;
