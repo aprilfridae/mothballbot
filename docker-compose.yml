@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: bot
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bot"]
+      interval: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://bot:${POSTGRES_PASSWORD}@postgres:5432/bot
+      PHOTO_DIR: /data/photos
+      TZ: America/Los_Angeles
+    volumes:
+      - photos:/data/photos
+
+volumes:
+  pgdata:
+  photos:
