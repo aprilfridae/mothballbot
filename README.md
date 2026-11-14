@@ -79,7 +79,7 @@ You'll get the policy IDs in step 5 below.
 
 ### 4. AI key
 
-Create an API key at <https://console.anthropic.com> and put it in `ANTHROPIC_API_KEY`. Drafts cost a cent or two each.
+Create an API key at <https://console.anthropic.com> and put it in `ANTHROPIC_API_KEY`. Drafts cost about a quarter of a cent each (Claude Haiku 5.5), so roughly 25¢ per 100 listings. Add ~$5 of credit and it will last a long time.
 
 ### 5. Start it
 
