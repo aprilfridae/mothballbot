@@ -30,7 +30,7 @@ function threadSink(client: Client, cfg: Config): ThreadSink {
     async createThread(name, firstMessage) {
       const forum = await client.channels.fetch(cfg.channels.buyers);
       if (forum?.type !== ChannelType.GuildForum) throw new Error('CHANNEL_BUYERS must be a Forum channel');
-      const thread = await forum.threads.create({ name, message: { content: firstMessage } });
+      const thread = await forum.threads.create({ name, message: { content: firstMessage, allowedMentions: { parse: [] } } });
       return thread.id;
     },
     async post(threadId, text) {
@@ -40,7 +40,7 @@ function threadSink(client: Client, cfg: Config): ThreadSink {
       });
       if (!thread?.isThread()) throw new ThreadGoneError(threadId);
       if (thread.archived) await thread.setArchived(false);
-      await thread.send(text);
+      await thread.send({ content: text, allowedMentions: { parse: [] } });
     },
   };
 }
@@ -168,6 +168,7 @@ async function main() {
           threadId: msg.channelId,
           authorId: msg.author.id,
           content: msg.content,
+          attachmentCount: msg.attachments.size,
           react: async (e) => {
             await msg.react(e);
           },

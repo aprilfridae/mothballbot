@@ -47,6 +47,7 @@ describe('fetchNewMessages', () => {
         body: 'Is this still available?',
         sentAt: new Date('2026-11-13T20:01:00.000Z'),
         item: { title: 'Nike Hoodie Mens L', url: 'https://www.ebay.com/itm/1234567890' },
+        media: [],
       },
     ]);
     expect(f.calls.some((c) => c.url.includes('/conversation/OLD'))).toBe(false);
@@ -92,5 +93,17 @@ describe('fetchNewMessages paging', () => {
     const msgs = await fetchNewMessages(createEbay(creds, f.fetch), 'shop', new Date('2026-11-13T20:00:00Z'));
     expect(f.calls[1].url).toContain('start_time=2026-11-13T20%3A00%3A00.000Z');
     expect(msgs.map((m) => m.body)).toEqual(expect.arrayContaining(['p1', 'p3']));
+  });
+});
+
+describe('fetchNewMessages media', () => {
+  it('includes photos a buyer attached', async () => {
+    const f = fakeFetch([
+      ['POST oauth2/token', () => tokenResponse()],
+      ['GET /commerce/message/v1/conversation/C1', () => json({ messages: [{ messageId: 'P', senderUsername: 'sam', messageBody: '', createdDate: '2026-11-13T20:01:00.000Z', messageMedia: [{ mediaName: 'chip.jpg', mediaType: 'IMAGE', mediaUrl: 'https://i.ebayimg.com/chip.jpg' }] }] })],
+      ['GET /commerce/message/v1/conversation?', () => json({ conversations: [{ conversationId: 'C1', latestMessage: { createdDate: '2026-11-13T20:05:00.000Z' } }] })],
+    ]);
+    const [m] = await fetchNewMessages(createEbay(creds, f.fetch), 'shop', new Date('2026-11-13T20:00:00Z'));
+    expect(m.media).toEqual([{ name: 'chip.jpg', url: 'https://i.ebayimg.com/chip.jpg' }]);
   });
 });

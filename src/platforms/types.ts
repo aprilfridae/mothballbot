@@ -11,6 +11,8 @@ export interface PlatformMessage {
   body: string;
   sentAt: Date;
   item: { title: string; url: string | null } | null;
+  /** Photos/files the buyer attached. */
+  media?: { name: string; url: string }[];
 }
 
 export interface PlatformOrder {

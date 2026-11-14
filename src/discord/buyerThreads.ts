@@ -26,13 +26,24 @@ export function threadName(username: string, platformLabel: string): string {
   return `${prefix}${name}${suffix}`;
 }
 
+/** Buyer text is untrusted: break @everyone/@here and user/role mentions so it can never ping anyone. */
+function noPings(text: string): string {
+  return text.replace(/@(everyone|here)/gi, '@\u200b$1').replace(/<@/g, '<\u200b@');
+}
+
 export function formatBuyerMessage(m: PlatformMessage): string {
   const header = m.item ? (m.item.url ? `**${m.item.title}** · ${m.item.url}` : `**${m.item.title}**`) : '';
-  const quoted = m.body
-    .split('\n')
-    .map((line) => `> ${line}`)
-    .join('\n');
-  const text = header ? `${header}\n${quoted}` : quoted;
+  const body = noPings(m.body.trim());
+  const quoted = body
+    ? body
+        .split('\n')
+        .map((line) => `> ${line}`)
+        .join('\n')
+    : m.media?.length
+      ? ''
+      : '> (empty message)';
+  const media = (m.media ?? []).map((x) => `📎 ${x.name} ${x.url}`).join('\n');
+  const text = [header, quoted, media].filter(Boolean).join('\n');
   return text.length <= MAX_POST ? text : text.slice(0, MAX_POST - 1) + '…';
 }
 
@@ -79,6 +90,8 @@ export interface ReplyMessage {
   threadId: string;
   authorId: string;
   content: string;
+  /** Photos/files attached to the owner's reply (eBay can't receive them from here). */
+  attachmentCount?: number;
   react: (emoji: string) => Promise<void>;
   reply: (text: string) => Promise<void>;
 }
@@ -123,6 +136,7 @@ export async function handleThreadReply(m: ReplyMessage, deps: ReplyDeps): Promi
   }
   try {
     await m.react('✅');
+    if (m.attachmentCount) await m.reply("Sent your text, but the photos weren't sent: buyers can't receive attachments from here yet.");
   } catch (e) {
     console.error('Could not react ✅ to a sent reply:', e);
   }

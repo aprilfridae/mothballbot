@@ -230,3 +230,47 @@ describe('handleThreadReply after a successful send', () => {
     expect(replies).toEqual([]);
   });
 });
+
+import { formatBuyerMessage } from '../../src/discord/buyerThreads.js';
+
+describe('formatBuyerMessage', () => {
+  const base = { conversationExternalId: 'C', messageExternalId: 'm', buyerUsername: 'b', sentAt: new Date(), item: null };
+
+  it("shows a buyer's photos as links, even with no text", () => {
+    const text = formatBuyerMessage({ ...base, body: '', media: [{ name: 'chip.jpg', url: 'https://i.ebayimg.com/chip.jpg' }] });
+    expect(text).toContain('📎 chip.jpg https://i.ebayimg.com/chip.jpg');
+    expect(text).not.toMatch(/^> $/m);
+  });
+
+  it('never lets a buyer ping the server', () => {
+    const text = formatBuyerMessage({ ...base, body: 'hey @everyone and @here <@123>' });
+    expect(text).not.toContain('@everyone');
+    expect(text).not.toContain('@here');
+    expect(text).not.toContain('<@123>');
+  });
+});
+
+describe('handleThreadReply with attachments', () => {
+  it('sends the text and says the photos were not sent', async () => {
+    const conv = await repo.upsertConversation(db, 'ebay', 'C7', 'pat');
+    await repo.setConversationThread(db, conv.id, 't7');
+    const replies: string[] = [];
+    const reactions: string[] = [];
+    let sent = '';
+    await handleThreadReply(
+      {
+        id: 'd7',
+        threadId: 't7',
+        authorId: 'owner',
+        content: 'Here is the back',
+        attachmentCount: 2,
+        react: async (e) => void reactions.push(e),
+        reply: async (t) => void replies.push(t),
+      },
+      { db, ownerId: 'owner', send: { ebay: async (_c, text) => ((sent = text), 'ebay:X') } },
+    );
+    expect(sent).toBe('Here is the back');
+    expect(reactions).toEqual(['✅']);
+    expect(replies[0]).toContain("photos weren't sent");
+  });
+});

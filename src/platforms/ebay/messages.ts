@@ -63,6 +63,9 @@ export async function fetchNewMessages(ebay: EbayClient, sellerUsername: string,
         body: m.messageBody ?? '',
         sentAt,
         item,
+        media: (m.messageMedia ?? [])
+          .filter((x: any) => typeof x?.mediaUrl === 'string')
+          .map((x: any) => ({ name: x.mediaName ?? 'attachment', url: x.mediaUrl })),
       });
     }
   }
