@@ -126,3 +126,56 @@ The exact database schema, polling intervals within the ranges above, the embed 
 ## One-time setup you'll do
 
 Register an eBay developer account and create shipping/return/payment business policies. Request Etsy API app access and create an Etsy shipping profile. Create a Gmail account for notifications and point all three platforms at it. Create the Discord bot in the Developer Portal. Log into Etsy and FB once through noVNC. Create a Telegram bot with @BotFather (about two minutes, free), and have your mom install Telegram and tap Start on the bot.
+
+---
+
+## 11. Change: Mom approves listings on Telegram, with AI price research (2026-11-13)
+
+**Status:** Draft, awaiting approval. This replaces the "List from Discord" goal (§2.1) and the Discord listing flow in §6.
+
+### Why
+
+Your mom sources the items, so she makes the final call on every listing. Your job is to send photos and the details. A lot of the stock is vintage housewares and antique china, where pricing takes real research and some pieces are worth a fair amount, so the bot researches prices before she sees the listing.
+
+### Flow
+
+1. **You (Discord `#new-listing`):** photos plus everything you know, in free text (maker, pattern, era, marks, condition, flaws). Include a backstamp or maker's-mark photo when there is one. A price is optional. If you give one, it's used as the starting price and the research is shown alongside it for reference.
+2. **AI draft:** the same as today. Haiku looks at the photos and your text and writes the title, description, condition and item specifics.
+3. **AI price research (approach A):** Haiku with Claude's web search tool looks for **sold** prices and comparable listings on eBay sold listings, Replacements.com, WorthPoint, Etsy, Ruby Lane and similar sites. It returns:
+   - a suggested price and a low–high range,
+   - a confidence level (low, medium or high),
+   - 3–5 comparables, each with title, price, sold-or-asking, site and link,
+   - one line of reasoning.
+
+   Searches are capped at 5 per item, about 2–5¢ per item.
+4. **Telegram to Mom:** first the photos (as an album), then the draft: title, **suggested price with range and confidence**, condition, a shortened description, item specifics, and the comparables as links. The buttons are **✅ Post to eBay**, **✏️ Edit** and **🗑 Reject**.
+5. **Editing on Telegram:**
+   - **✏️ Edit** shows one button per field: Title, Price, Condition, Description, Item specifics.
+   - Condition is chosen with buttons. For every other field, the bot asks her to type the new value and then updates the draft message in place.
+   - Only one field is edited at a time. **Cancel** backs out.
+6. **Posting:**
+   - **✅ Post** uploads to eBay using the existing posting code and edits her message to "✅ Live on eBay" with the link.
+   - If eBay rejects it (for example, missing item specifics), she sees eBay's reason and an **✏️ Edit** button. Nothing fails silently.
+7. **Discord becomes your status view.** The `#new-listing` reply updates as the listing moves along, and you get no buttons:
+   - "Researching price…"
+   - "Sent to Mom · suggested $45 ($30–60)"
+   - "Posted by Mom" with the link, or "Rejected by Mom", or "Waiting on Mom: eBay needs Color"
+
+### Edge cases (my calls)
+
+- **Research finds nothing, or fails:** the draft still goes to Mom marked "Couldn't find comparables, please set a price", and **Post** stays disabled until she sets one.
+- **Mom isn't connected on Telegram yet:** drafts wait and are sent when she connects. `#bot-status` warns once, the same as with sales.
+- **Several drafts at once:** each Telegram draft message is tied to its item, so she can work through them in any order.
+- **Twice-tapped Post:** guarded the same way as in Discord. It posts once and the button shows "Posting…".
+
+### Approaches considered for pricing
+
+| Option | Verdict |
+|---|---|
+| **A. AI agent with web search (sold prices, pattern databases)** | **Chosen.** It's the only option that reaches sold prices and sites like Replacements; about 2–5¢ per item. |
+| B. Official eBay and Etsy APIs (active listings only) | Rejected. Asking prices run high for antiques, and eBay's sold-data API is restricted. |
+| C. A + B | Rejected for now. More to build for little extra accuracy. Could be added later. |
+
+### Left to the builder
+
+The exact web-search tool version string, the prompt wording, Telegram message layout, and how long descriptions get shortened for Telegram's caption limits.
