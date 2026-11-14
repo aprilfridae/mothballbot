@@ -5,6 +5,13 @@ import { PLATFORM_LABEL, type Platform, type PlatformMessage } from '../platform
 const MAX_THREAD_NAME = 100;
 const MAX_POST = 2000;
 
+/** Thrown by a ThreadSink when the thread was deleted in Discord; the conversation then gets a fresh thread. */
+export class ThreadGoneError extends Error {
+  constructor(threadId: string) {
+    super(`Buyer thread ${threadId} no longer exists`);
+  }
+}
+
 export interface ThreadSink {
   /** Creates a forum post (thread) with the given name and first message; returns the thread id. */
   createThread(name: string, firstMessage: string): Promise<string>;
@@ -30,23 +37,41 @@ export function formatBuyerMessage(m: PlatformMessage): string {
 }
 
 /**
- * Posts each new buyer message into that buyer's thread, creating the thread on first contact.
- * A message is recorded only after Discord accepted it, so a failed post is retried on the next poll.
+ * Posts each new buyer message into that buyer's thread, creating the thread on first contact (or again if it
+ * was deleted). A message is recorded only after Discord accepted it, so a failed post is retried on the next poll.
  */
 export async function mirrorMessages(db: Db, platform: Platform, msgs: PlatformMessage[], sink: ThreadSink): Promise<void> {
+  const failures: Error[] = [];
   for (const m of msgs) {
-    if (await repo.messageExists(db, m.messageExternalId)) continue;
-
-    const conv = await repo.upsertConversation(db, platform, m.conversationExternalId, m.buyerUsername);
-    const text = formatBuyerMessage(m);
-    if (conv.discordThreadId) {
-      await sink.post(conv.discordThreadId, text);
-    } else {
-      const threadId = await sink.createThread(threadName(m.buyerUsername, PLATFORM_LABEL[platform]), text);
-      await repo.setConversationThread(db, conv.id, threadId);
+    try {
+      await mirrorOne(db, platform, m, sink);
+    } catch (e) {
+      failures.push(e as Error);
     }
-    await repo.insertMessageIfNew(db, conv.id, m.messageExternalId, true, m.body, m.sentAt);
   }
+  // Fail the run so the cursor stays put and the failed messages are retried; the others are already recorded.
+  if (failures.length) throw failures[0];
+}
+
+async function mirrorOne(db: Db, platform: Platform, m: PlatformMessage, sink: ThreadSink): Promise<void> {
+  if (await repo.messageExists(db, m.messageExternalId)) return;
+
+  const conv = await repo.upsertConversation(db, platform, m.conversationExternalId, m.buyerUsername);
+  const text = formatBuyerMessage(m);
+  let posted = false;
+  if (conv.discordThreadId) {
+    try {
+      await sink.post(conv.discordThreadId, text);
+      posted = true;
+    } catch (e) {
+      if (!(e instanceof ThreadGoneError)) throw e;
+    }
+  }
+  if (!posted) {
+    const threadId = await sink.createThread(threadName(m.buyerUsername, PLATFORM_LABEL[platform]), text);
+    await repo.setConversationThread(db, conv.id, threadId);
+  }
+  await repo.insertMessageIfNew(db, conv.id, m.messageExternalId, true, m.body, m.sentAt);
 }
 
 export interface ReplyMessage {
@@ -82,12 +107,23 @@ export async function handleThreadReply(m: ReplyMessage, deps: ReplyDeps): Promi
     return;
   }
 
+  let sentId: string | null;
   try {
-    const sentId = await send(conv.externalId, text);
-    await repo.insertMessageIfNew(deps.db, conv.id, sentId ?? `local:${m.id}`, false, text, new Date());
-    await m.react('✅');
+    sentId = await send(conv.externalId, text);
   } catch (e) {
     await m.react('❌');
     await m.reply(`Couldn't send: ${(e as Error).message}`);
+    return;
+  }
+  // The buyer already has the message; bookkeeping failures must not make it look unsent (and get resent).
+  try {
+    await repo.insertMessageIfNew(deps.db, conv.id, sentId ?? `local:${m.id}`, false, text, new Date());
+  } catch (e) {
+    console.error('Could not record a sent reply:', e);
+  }
+  try {
+    await m.react('✅');
+  } catch (e) {
+    console.error('Could not react ✅ to a sent reply:', e);
   }
 }

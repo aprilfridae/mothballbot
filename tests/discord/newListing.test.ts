@@ -170,6 +170,13 @@ describe('handleIntakeMessage', () => {
     expect(item.discord_message_id).toBe('reply-1');
   });
 
+  it("notes in the preview when the AI couldn't view any of the photos (all HEIC)", async () => {
+    const { deps } = makeDeps();
+    const { msg, replies } = intake({ attachments: [{ name: 'IMG_1.heic', contentType: 'image/heic', url: 'u' }] });
+    await handleIntakeMessage(msg, deps);
+    expect(embedOf(replies[0]).footer.text).toContain("AI couldn't view HEIC photos");
+  });
+
   it('ignores messages from anyone but the owner', async () => {
     const { deps, log } = makeDeps();
     const { msg, replies } = intake({ authorId: 'stranger' });
@@ -223,7 +230,7 @@ describe('handleButton', () => {
     expect(b.calls.deferred).toBe(1);
     expect(log.uploads).toBe(3);
     expect(log.listings[0]).toMatchObject({ sku: `item-${id}`, priceCents: 3500, categoryId: '155183' });
-    expect(fieldValue(b.calls.edits[0], 'eBay')).toContain('https://www.ebay.com/itm/999');
+    expect(fieldValue(b.calls.edits.at(-1), 'eBay')).toContain('https://www.ebay.com/itm/999');
   });
 
   it("shows eBay's error, keeps Post and Edit enabled, and only reports auth failures", async () => {
@@ -234,7 +241,7 @@ describe('handleButton', () => {
     };
     const b = button(`post:ebay:${id}`);
     await handleButton(b.i, deps);
-    const payload = b.calls.edits[0];
+    const payload = b.calls.edits.at(-1);
     expect(fieldValue(payload, 'eBay')).toContain('Item specific Brand is missing');
     expect(buttons(payload).find((x: any) => x.custom_id === `post:ebay:${id}`).disabled).toBe(false);
     expect(buttons(payload).find((x: any) => x.custom_id === `edit:${id}`).disabled).toBe(false);
@@ -254,7 +261,38 @@ describe('handleButton', () => {
     const b = button(`post:ebay:${id}`);
     await handleButton(b.i, deps);
     expect(log.listings).toHaveLength(0);
-    expect(fieldValue(b.calls.edits[0], 'eBay')).toContain('Color');
+    expect(fieldValue(b.calls.edits.at(-1), 'eBay')).toContain('Color');
+  });
+
+  it('shows a disabled Posting… state right away and ignores a second tap while posting', async () => {
+    const id = await createItem();
+    const { deps, log } = makeDeps();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const original = deps.ebay.createListing;
+    deps.ebay.createListing = async (input) => {
+      await gate;
+      return original(input);
+    };
+    const first = button(`post:ebay:${id}`);
+    const second = button(`post:ebay:${id}`);
+    const p1 = handleButton(first.i, deps);
+    await new Promise((r) => setTimeout(r, 20));
+    await handleButton(second.i, deps);
+    release();
+    await p1;
+    expect(log.listings).toHaveLength(1);
+    const posting = buttons(first.calls.edits[0]).find((x: any) => x.custom_id === `post:ebay:${id}`);
+    expect(posting).toMatchObject({ label: 'Posting…', disabled: true });
+    expect(second.calls.deferred).toBe(1);
+    expect(second.calls.edits).toHaveLength(0);
+  });
+
+  it('never replaces a live listing with an error', async () => {
+    const id = await createItem();
+    await repo.upsertListing(db, id, 'ebay', { externalId: '999', url: 'u', status: 'live', error: null });
+    await repo.upsertListing(db, id, 'ebay', { externalId: null, url: null, status: 'error', error: 'late failure' });
+    expect((await repo.getListings(db, id))[0].status).toBe('live');
   });
 
   it('ignores button presses from anyone but the owner', async () => {
@@ -276,6 +314,17 @@ describe('handleButton', () => {
     const inputs = modal.components.map((r: any) => r.components[0]);
     expect(inputs.find((x: any) => x.custom_id === 'price').value).toBe('35.00');
     expect(inputs.find((x: any) => x.custom_id === 'specifics').value).toBe('Size: L');
+  });
+
+  it('leaves the specifics box empty (no value) when the draft has no item specifics', async () => {
+    const { deps } = makeDeps({ draft: async () => ({ ...draft, aspects: {} }) });
+    const { msg } = intake();
+    await handleIntakeMessage(msg, deps);
+    const id = (await db.query('SELECT id FROM items')).rows[0].id;
+    const b = button(`edit:${id}`);
+    await handleButton(b.i, deps);
+    const specifics = b.calls.modals[0].components.map((r: any) => r.components[0]).find((x: any) => x.custom_id === 'specifics');
+    expect(specifics).not.toHaveProperty('value');
   });
 
   it('cancels the draft', async () => {

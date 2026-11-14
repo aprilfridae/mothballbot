@@ -130,7 +130,8 @@ export async function upsertListing(
      VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (item_id, platform) DO UPDATE
        SET external_id = EXCLUDED.external_id, url = EXCLUDED.url,
-           status = EXCLUDED.status, error = EXCLUDED.error`,
+           status = EXCLUDED.status, error = EXCLUDED.error
+       WHERE listings.status <> 'live' OR EXCLUDED.status = 'live'`,
     [itemId, platform, l.externalId, l.url, l.status, l.error],
   );
 }
@@ -262,6 +263,13 @@ export async function setOrderTrackingIfMissing(db: Db, orderId: number, trackin
     tracking,
   ]);
   return rowCount === 1;
+}
+
+export async function unshippedOrdersWithoutTelegram(db: Db): Promise<Order[]> {
+  const { rows } = await db.query(
+    'SELECT * FROM orders WHERE telegram_message_id IS NULL AND shipped_at IS NULL ORDER BY id',
+  );
+  return rows.map(toOrder);
 }
 
 export async function findOrderByExternal(db: Db, platform: Platform, externalId: string): Promise<Order | null> {

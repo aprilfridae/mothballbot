@@ -1,5 +1,6 @@
 import { Client, Events, GatewayIntentBits, Partials, type Message } from 'discord.js';
 import type { Config } from '../config.js';
+import { guarded, type Reporter } from '../util/guard.js';
 import { handleButton, handleEditModal, handleIntakeMessage, type ListingDeps } from './newListing.js';
 
 export interface BotRoutes {
@@ -22,9 +23,8 @@ export function createDiscordClient(): Client {
   });
 }
 
-export function wireDiscord(client: Client, cfg: Config, routes: BotRoutes): void {
-  const safe = (label: string, fn: () => Promise<unknown>) =>
-    fn().catch((e) => console.error(`Discord handler failed (${label}):`, e));
+export function wireDiscord(client: Client, cfg: Config, routes: BotRoutes, report: Reporter): void {
+  const safe = (label: string, fn: () => Promise<unknown>) => void guarded(`Discord ${label}`, fn, report);
 
   client.on(Events.MessageCreate, (msg) => {
     if (msg.author.bot || msg.author.id !== cfg.ownerDiscordId) return;

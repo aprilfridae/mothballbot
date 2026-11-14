@@ -167,3 +167,66 @@ describe('handleThreadReply', () => {
     expect(replies[0]).toContain('only text');
   });
 });
+
+import { ThreadGoneError } from '../../src/discord/buyerThreads.js';
+
+describe('mirrorMessages resilience', () => {
+  it('recreates a buyer thread that was deleted in Discord', async () => {
+    const { s, threads, posts } = sink();
+    await mirrorMessages(db, 'ebay', [msg('m1', 'C1', 'sam_92', 'hi')], s);
+    const gone: ThreadSink = {
+      ...s,
+      post: async (id, text) => {
+        if (id === 't1') throw new ThreadGoneError(id);
+        return s.post(id, text);
+      },
+    };
+    await mirrorMessages(db, 'ebay', [msg('m2', 'C1', 'sam_92', 'hello again')], gone);
+    expect(threads.map((t) => t.id)).toEqual(['t1', 't2']);
+    expect(threads[1].first).toContain('hello again');
+    expect(posts).toHaveLength(0);
+    expect((await repo.upsertConversation(db, 'ebay', 'C1', 'sam_92')).discordThreadId).toBe('t2');
+  });
+
+  it("does not let one failing message block other buyers' messages, but still fails the run", async () => {
+    const { s, threads } = sink();
+    const flaky: ThreadSink = {
+      ...s,
+      createThread: async (name, first) => {
+        if (first.includes('boom')) throw new Error('Discord 500');
+        return s.createThread(name, first);
+      },
+    };
+    await expect(
+      mirrorMessages(db, 'ebay', [msg('m1', 'C1', 'sam_92', 'boom'), msg('m3', 'C2', 'jo', 'hello')], flaky),
+    ).rejects.toThrow('Discord 500');
+    expect(threads.map((t) => t.name)).toEqual(['buyer: jo · eBay']);
+  });
+});
+
+describe('handleThreadReply after a successful send', () => {
+  it('never shows ❌ or "Couldn\'t send" once the platform accepted the reply', async () => {
+    const conv = await repo.upsertConversation(db, 'ebay', 'C9', 'kim');
+    await repo.setConversationThread(db, conv.id, 't9');
+    const reactions: string[] = [];
+    const replies: string[] = [];
+    let sends = 0;
+    await handleThreadReply(
+      {
+        id: 'd9',
+        threadId: 't9',
+        authorId: 'owner',
+        content: 'yes',
+        react: async (e) => {
+          reactions.push(e);
+          if (e === '✅') throw new Error('Missing Permissions');
+        },
+        reply: async (t) => void replies.push(t),
+      },
+      { db, ownerId: 'owner', send: { ebay: async () => (sends++, 'ebay:M10') } },
+    );
+    expect(sends).toBe(1);
+    expect(reactions).toEqual(['✅']);
+    expect(replies).toEqual([]);
+  });
+});

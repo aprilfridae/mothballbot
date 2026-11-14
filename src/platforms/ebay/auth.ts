@@ -5,6 +5,7 @@ export const TOKEN_URL = 'https://api.ebay.com/identity/v1/oauth2/token';
 
 /** OAuth scopes the refresh token must have been granted (see README for how to mint it). */
 export const SCOPES = [
+  'https://api.ebay.com/oauth/api_scope',
   'https://api.ebay.com/oauth/api_scope/sell.inventory',
   'https://api.ebay.com/oauth/api_scope/sell.account',
   'https://api.ebay.com/oauth/api_scope/sell.fulfillment',

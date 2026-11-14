@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import sharp from 'sharp';
 import { draftListing, DraftError, type AnthropicLike } from '../../src/ai/draftListing.js';
 
 function fakeClient(text: string, calls: any[] = []): AnthropicLike {
@@ -21,7 +22,8 @@ const good = {
   categoryQuery: 'mens hoodie',
 };
 
-const input = { title: 'Nike hoodie size L', priceCents: 3500, photos: [{ mime: 'image/jpeg', data: Buffer.from('x') }] };
+const tinyJpeg = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#000' } }).jpeg().toBuffer();
+const input = { title: 'Nike hoodie size L', priceCents: 3500, photos: [{ mime: 'image/jpeg', data: tinyJpeg }] };
 
 describe('draftListing', () => {
   it('returns the parsed draft and sends photos to a haiku model', async () => {
@@ -53,5 +55,27 @@ describe('draftListing', () => {
     await expect(draftListing(input, fakeClient(JSON.stringify({ ...good, condition: 'MINT' })))).rejects.toBeInstanceOf(
       DraftError,
     );
+  });
+
+  it('shrinks large photos before sending them to the AI', async () => {
+    const big = await sharp({ create: { width: 4000, height: 3000, channels: 3, background: '#884422' } })
+      .jpeg({ quality: 100 })
+      .toBuffer();
+    const calls: any[] = [];
+    await draftListing({ ...input, photos: [{ mime: 'image/jpeg', data: big }] }, fakeClient(JSON.stringify(good), calls));
+    const img = calls[0].messages[0].content.find((b: any) => b.type === 'image');
+    const meta = await sharp(Buffer.from(img.source.data, 'base64')).metadata();
+    expect(Math.max(meta.width!, meta.height!)).toBeLessThanOrEqual(1568);
+    expect(img.source.media_type).toBe('image/jpeg');
+  });
+
+  it('skips a photo it cannot read instead of failing the draft', async () => {
+    const calls: any[] = [];
+    const d = await draftListing(
+      { ...input, photos: [{ mime: 'image/png', data: Buffer.from('not really a png') }] },
+      fakeClient(JSON.stringify(good), calls),
+    );
+    expect(d.title).toBe(good.title);
+    expect(calls[0].messages[0].content.filter((b: any) => b.type === 'image')).toHaveLength(0);
   });
 });

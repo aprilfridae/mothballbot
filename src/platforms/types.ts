@@ -29,5 +29,5 @@ export interface PlatformConnector {
   fetchNewMessages(since: Date): Promise<PlatformMessage[]>;
   sendReply(conversationExternalId: string, text: string): Promise<string | null>;
   fetchNewOrders(since: Date): Promise<PlatformOrder[]>;
-  uploadTracking?(order: { externalId: string; lineItemIds: string[] }, tracking: string, carrier: string): Promise<void>;
+  fulfill?(order: { externalId: string; lineItemIds: string[] }, tracking: string | null, carrier: string | null): Promise<void>;
 }

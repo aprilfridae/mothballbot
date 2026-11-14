@@ -49,7 +49,7 @@ cp .env.example .env
 3. Open this URL in your browser, filling in your App ID and RuName. Sign in with the **seller** account and click Agree.
 
    ```
-   https://auth.ebay.com/oauth2/authorize?client_id=YOUR_APP_ID&redirect_uri=YOUR_RUNAME&response_type=code&scope=https://api.ebay.com/oauth/api_scope/sell.inventory%20https://api.ebay.com/oauth/api_scope/sell.account%20https://api.ebay.com/oauth/api_scope/sell.fulfillment%20https://api.ebay.com/oauth/api_scope/commerce.message
+   https://auth.ebay.com/oauth2/authorize?client_id=YOUR_APP_ID&redirect_uri=YOUR_RUNAME&response_type=code&scope=https://api.ebay.com/oauth/api_scope%20https://api.ebay.com/oauth/api_scope/sell.inventory%20https://api.ebay.com/oauth/api_scope/sell.account%20https://api.ebay.com/oauth/api_scope/sell.fulfillment%20https://api.ebay.com/oauth/api_scope/commerce.message
    ```
 
 4. You'll land on a page whose address contains `code=...`. Copy that code (URL-decoded) and run:
@@ -83,7 +83,7 @@ Create an API key at <https://console.anthropic.com> and put it in `ANTHROPIC_AP
 
 ### 5. Start it
 
-1. Set `POSTGRES_PASSWORD` to any long random string.
+1. Set `POSTGRES_PASSWORD` to a long random string of letters and numbers only (e.g. `openssl rand -hex 16`).
 2. Print your eBay policy IDs and create the ship-from location (use your ZIP, city and state):
 
    ```bash

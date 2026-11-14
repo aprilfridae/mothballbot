@@ -12,6 +12,8 @@ export interface MomDeps {
   db: Db;
   linkCode: string;
   markShipped: (orderId: number, by: 'mom', tracking: string | null) => Promise<ShipResult>;
+  /** Called right after Mom connects, to send her any sales she missed. */
+  onLinked?: () => Promise<void>;
 }
 
 async function momChatId(db: Db): Promise<number | null> {
@@ -49,6 +51,10 @@ export async function handleStart(chatId: number, payload: string, deps: MomDeps
   const current = await momChatId(deps.db);
   if (current !== null && current !== chatId) return null;
   await repo.setSetting(deps.db, MOM_CHAT_KEY, String(chatId));
+  if (deps.onLinked) {
+    // Run after the welcome reply is sent, so pending sales arrive below it.
+    setTimeout(() => void deps.onLinked!().catch((e) => console.error('Sending pending sales to Mom failed:', e)), 0);
+  }
   return "You're connected 👋 You'll get a message here for every sale.";
 }
 
@@ -89,7 +95,8 @@ export interface MomBot {
   notifyMom(order: Order): Promise<number | null>;
   /** Edits a sale message to show its shipped status and removes the button. */
   markMessage(order: Order, label: string): Promise<void>;
-  start(): void;
+  /** Starts long polling; a polling crash (bad token, second instance) is passed to onError instead of killing the app. */
+  start(onError: (e: unknown) => void): void;
   stop(): Promise<void>;
 }
 
@@ -130,8 +137,8 @@ export function createMomBot(token: string, deps: MomDeps): MomBot {
         reply_markup: new InlineKeyboard(),
       });
     },
-    start() {
-      void bot.start({ allowed_updates: ['message', 'callback_query'] });
+    start(onError) {
+      bot.start({ allowed_updates: ['message', 'callback_query'] }).catch(onError);
     },
     stop: () => bot.stop(),
   };

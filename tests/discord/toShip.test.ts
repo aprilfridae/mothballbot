@@ -86,3 +86,52 @@ describe('handleToShipReaction', () => {
     expect(calls).toEqual([[id, 'owner', null]]);
   });
 });
+
+describe('announceOrders resilience', () => {
+  it('keeps announcing other orders when one fails, then fails the run', async () => {
+    const second = { ...order, externalId: 'E2', itemTitle: 'Lamp' };
+    const posted: string[] = [];
+    const { d } = deps({
+      postToShip: async (text) => {
+        if (text.includes('Nike')) throw new Error('Discord 500');
+        posted.push(text);
+        return 'd-lamp';
+      },
+    });
+    await expect(announceOrders('ebay', [order, second], d)).rejects.toThrow('Discord 500');
+    expect(posted).toEqual([expect.stringContaining('Lamp')]);
+  });
+});
+
+import { sendPendingToMom } from '../../src/discord/toShip.js';
+
+describe("Mom's pending alerts", () => {
+  it('sends every unshipped sale she has not seen once she is reachable, and warns once while she is not', async () => {
+    const reports: string[] = [];
+    let linked = false;
+    const notifyMom = async (o: any) => (linked ? 900 + o.id : null);
+    const { d } = deps({ notifyMom });
+    await announceOrders('ebay', [order, { ...order, externalId: 'E2', itemTitle: 'Lamp' }], d);
+
+    const sweep = { db, notifyMom, report: async (t: string) => void reports.push(t) };
+    await sendPendingToMom(sweep);
+    await sendPendingToMom(sweep);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toContain("isn't connected");
+
+    linked = true;
+    await sendPendingToMom(sweep);
+    const rows = (await db.query('SELECT telegram_message_id FROM orders ORDER BY id')).rows;
+    expect(rows.every((r) => r.telegram_message_id !== null)).toBe(true);
+  });
+
+  it('skips orders that are already shipped', async () => {
+    const { d } = deps({ notifyMom: async () => null });
+    await announceOrders('ebay', [order], d);
+    const id = (await db.query('SELECT id FROM orders')).rows[0].id;
+    await repo.markOrderShippedRow(db, id, 'owner', null);
+    let sent = 0;
+    await sendPendingToMom({ db, notifyMom: async () => (sent++, 1), report: async () => {} });
+    expect(sent).toBe(0);
+  });
+});

@@ -36,16 +36,16 @@ export async function fetchNewOrders(ebay: EbayClient, since: Date): Promise<Pla
     .map(mapOrder);
 }
 
-export async function uploadTracking(
+/** Marks the order shipped on eBay (the buyer gets notified); tracking is added when known. */
+export async function createFulfillment(
   ebay: EbayClient,
   order: { externalId: string; lineItemIds: string[] },
-  tracking: string,
-  carrier: string,
+  tracking: string | null,
+  carrier: string | null,
 ): Promise<void> {
   await ebay.request('POST', `${BASE}/order/${encodeURIComponent(order.externalId)}/shipping_fulfillment`, {
     lineItems: order.lineItemIds.map((lineItemId) => ({ lineItemId, quantity: 1 })),
     shippedDate: new Date().toISOString(),
-    shippingCarrierCode: carrier,
-    trackingNumber: tracking,
+    ...(tracking && carrier ? { shippingCarrierCode: carrier, trackingNumber: tracking } : {}),
   });
 }

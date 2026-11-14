@@ -140,3 +140,13 @@ describe('formatSaleForMom', () => {
     expect(text).toContain('Local pickup');
   });
 });
+
+describe('linking triggers pending alerts', () => {
+  it('calls onLinked after Mom connects', async () => {
+    const { d } = deps();
+    let linked = 0;
+    await handleStart(MOM, 'secret-code', { ...d, onLinked: async () => void linked++ });
+    await new Promise((r) => setTimeout(r, 10)); // runs just after the welcome reply
+    expect(linked).toBe(1);
+  });
+});

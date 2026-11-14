@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createEbay } from '../../../src/platforms/ebay/client.js';
-import { fetchNewOrders, uploadTracking } from '../../../src/platforms/ebay/orders.js';
+import { fetchNewOrders, createFulfillment } from '../../../src/platforms/ebay/orders.js';
 import { fakeFetch, json, tokenResponse } from '../../helpers/fakeFetch.js';
 
 const creds = { clientId: 'id', clientSecret: 's', refreshToken: 'r' };
@@ -54,18 +54,29 @@ describe('fetchNewOrders', () => {
   });
 });
 
-describe('uploadTracking', () => {
-  it('creates a shipping fulfillment for every line item', async () => {
+describe('createFulfillment', () => {
+  it('creates a shipping fulfillment with tracking for every line item', async () => {
     const f = fakeFetch([
       ['POST oauth2/token', () => tokenResponse()],
       ['POST /shipping_fulfillment', () => json(null, 201)],
     ]);
-    await uploadTracking(createEbay(creds, f.fetch), { externalId: '12-34567-89012', lineItemIds: ['L1'] }, '1Z999AA10123456784', 'UPS');
+    await createFulfillment(createEbay(creds, f.fetch), { externalId: '12-34567-89012', lineItemIds: ['L1'] }, '1Z999AA10123456784', 'UPS');
     expect(f.calls[1].url).toContain('/sell/fulfillment/v1/order/12-34567-89012/shipping_fulfillment');
     expect(f.calls[1].body).toMatchObject({
       lineItems: [{ lineItemId: 'L1', quantity: 1 }],
       shippingCarrierCode: 'UPS',
       trackingNumber: '1Z999AA10123456784',
     });
+  });
+
+  it('marks shipped without tracking fields when there is no tracking', async () => {
+    const f = fakeFetch([
+      ['POST oauth2/token', () => tokenResponse()],
+      ['POST /shipping_fulfillment', () => json(null, 201)],
+    ]);
+    await createFulfillment(createEbay(creds, f.fetch), { externalId: 'O1', lineItemIds: ['L1'] }, null, null);
+    expect(f.calls[1].body.lineItems).toEqual([{ lineItemId: 'L1', quantity: 1 }]);
+    expect(f.calls[1].body).not.toHaveProperty('trackingNumber');
+    expect(f.calls[1].body).not.toHaveProperty('shippingCarrierCode');
   });
 });

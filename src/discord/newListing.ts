@@ -7,7 +7,7 @@ import {
   TextInputBuilder,
   TextInputStyle,
 } from 'discord.js';
-import { CONDITIONS, truncateTitle, type Condition, type DraftInput, type ListingDraft } from '../ai/draftListing.js';
+import { AI_IMAGE_TYPES, CONDITIONS, truncateTitle, type Condition, type DraftInput, type ListingDraft } from '../ai/draftListing.js';
 import type { Db } from '../db/db.js';
 import * as repo from '../db/repo.js';
 import type { ListingRow } from '../db/repo.js';
@@ -17,6 +17,9 @@ import type { EbayListingInput } from '../platforms/ebay/listings.js';
 import { PLATFORM_LABEL } from '../platforms/types.js';
 
 export const MAX_PHOTOS = 24;
+
+/** Items currently being posted, so a double tap can't publish twice. */
+const postingNow = new Set<string>();
 
 export interface ListingDeps {
   db: Db;
@@ -91,6 +94,7 @@ export function buildPreview(
   draft: ListingDraft,
   listings: ListingRow[],
   skipped: string[],
+  postingTo: string | null = null,
 ) {
   const embed = new EmbedBuilder()
     .setTitle(draft.title)
@@ -117,9 +121,9 @@ export function buildPreview(
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`post:ebay:${item.id}`)
-      .setLabel(live('ebay') ? 'On eBay' : 'Post to eBay')
+      .setLabel(postingTo === 'ebay' ? 'Posting…' : live('ebay') ? 'On eBay' : 'Post to eBay')
       .setStyle(ButtonStyle.Primary)
-      .setDisabled(live('ebay')),
+      .setDisabled(live('ebay') || postingTo === 'ebay'),
     new ButtonBuilder().setCustomId(`post:etsy:${item.id}`).setLabel('Etsy (soon)').setStyle(ButtonStyle.Secondary).setDisabled(true),
     new ButtonBuilder().setCustomId(`post:facebook:${item.id}`).setLabel('FB (soon)').setStyle(ButtonStyle.Secondary).setDisabled(true),
     new ButtonBuilder().setCustomId(`edit:${item.id}`).setLabel('Edit').setStyle(ButtonStyle.Secondary).setDisabled(false),
@@ -158,6 +162,10 @@ export async function handleIntakeMessage(msg: IntakeMessage, deps: ListingDeps)
       const data = await deps.downloadPhoto(a.url);
       const path = await deps.savePhoto(msg.id, safeName(a.name, i), data);
       photos.push({ path, mime: a.contentType ?? mimeFromPath(a.name), data });
+    }
+
+    if (!photos.some((p) => AI_IMAGE_TYPES.has(p.mime))) {
+      skipped.push("(AI couldn't view HEIC photos, so double-check the details)");
     }
 
     const draft = await deps.draft({
@@ -232,15 +240,11 @@ async function postToEbay(deps: ListingDeps, item: repo.Item, draft: ListingDraf
 
 function editModal(itemId: number, priceCents: number, draft: ListingDraft) {
   const input = (id: string, label: string, value: string, style: TextInputStyle, max: number, required = true) =>
-    new ActionRowBuilder<TextInputBuilder>().addComponents(
-      new TextInputBuilder()
-        .setCustomId(id)
-        .setLabel(label)
-        .setStyle(style)
-        .setValue(clip(value, max))
-        .setMaxLength(max)
-        .setRequired(required),
-    );
+    {
+      const box = new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(style).setMaxLength(max).setRequired(required);
+      if (value) box.setValue(clip(value, max)); // Discord rejects an empty prefilled value
+      return new ActionRowBuilder<TextInputBuilder>().addComponents(box);
+    };
   const specifics = Object.entries(draft.aspects)
     .map(([k, v]) => `${k}: ${v.join(', ')}`)
     .join('\n');
@@ -267,8 +271,16 @@ export async function handleButton(i: ButtonInteractionLike, deps: ListingDeps):
 
   if (action === 'post' && a === 'ebay') {
     await i.deferUpdate();
-    await postToEbay(deps, item, draft);
-    await i.editReply(buildPreview(item, draft, await repo.getListings(deps.db, id), skipped));
+    const key = `ebay:${id}`;
+    if (postingNow.has(key)) return; // a second tap while the first is still uploading
+    postingNow.add(key);
+    try {
+      await i.editReply(buildPreview(item, draft, await repo.getListings(deps.db, id), skipped, 'ebay'));
+      await postToEbay(deps, item, draft);
+      await i.editReply(buildPreview(item, draft, await repo.getListings(deps.db, id), skipped));
+    } finally {
+      postingNow.delete(key);
+    }
   } else if (action === 'edit') {
     await i.showModal(editModal(id, item.priceCents, draft));
   } else if (action === 'cancel') {

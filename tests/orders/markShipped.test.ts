@@ -31,7 +31,7 @@ function deps() {
   const log = { uploads: [] as any[], discord: [] as string[], telegram: [] as string[] };
   const d: ShipDeps = {
     db,
-    uploadTracking: {
+    fulfill: {
       ebay: async (o, tracking, carrier) => {
         log.uploads.push({ id: o.externalId, tracking, carrier });
       },
@@ -53,7 +53,7 @@ describe('markShipped', () => {
     expect(await markShipped(o.id, 'mom', null, d)).toBe('shipped');
     expect(await markShipped(o.id, 'mom', null, d)).toBe('already');
     expect(await markShipped(o.id, 'owner', null, d)).toBe('already');
-    expect(log.uploads).toHaveLength(0);
+    expect(log.uploads).toEqual([{ id: 'E1', tracking: null, carrier: null }]);
     expect(log.discord).toEqual(['📦 Shipped (by Mom)']);
     expect(log.telegram).toEqual(['✅ Shipped']);
   });
@@ -66,11 +66,11 @@ describe('markShipped', () => {
     expect(log.telegram).toEqual(['✅ Shipped · tracking 1Z999AA10123456784']);
   });
 
-  it('marks shipped without calling eBay when the carrier is unknown', async () => {
+  it('marks shipped on eBay without tracking when the carrier is unknown', async () => {
     const o = await order();
     const { d, log } = deps();
     expect(await markShipped(o.id, 'owner', 'ABC123', d)).toBe('shipped');
-    expect(log.uploads).toHaveLength(0);
+    expect(log.uploads).toEqual([{ id: 'E1', tracking: null, carrier: null }]);
     expect(log.discord[0]).toContain('📦 Shipped (by you)');
   });
 
@@ -79,20 +79,23 @@ describe('markShipped', () => {
     const { d, log } = deps();
     await markShipped(o.id, 'mom', null, d);
     expect(await markShipped(o.id, 'mom', '9400111899223197428490', d)).toBe('tracking-added');
-    expect(log.uploads).toEqual([{ id: 'E1', tracking: '9400111899223197428490', carrier: 'USPS' }]);
+    expect(log.uploads).toEqual([
+      { id: 'E1', tracking: null, carrier: null },
+      { id: 'E1', tracking: '9400111899223197428490', carrier: 'USPS' },
+    ]);
     expect(await markShipped(o.id, 'mom', '9400111899223197428490', d)).toBe('already');
-    expect(log.uploads).toHaveLength(1);
+    expect(log.uploads).toHaveLength(2);
   });
 
   it('still marks the order shipped when the tracking upload fails, and reports why', async () => {
     const o = await order();
     const { d, log } = deps();
-    d.uploadTracking.ebay = async () => {
+    d.fulfill.ebay = async () => {
       throw new Error('Invalid tracking number');
     };
     const result = await markShipped(o.id, 'mom', '1Z999AA10123456784', d);
     expect(result).toBe('shipped');
-    expect(log.telegram[0]).toContain("couldn't add tracking to eBay: Invalid tracking number");
+    expect(log.telegram[0]).toContain("couldn't update eBay: Invalid tracking number");
     expect((await repo.getOrder(db, o.id))!.shippedBy).toBe('mom');
   });
 });

@@ -7,18 +7,19 @@ import { loadConfig, type Config } from './config.js';
 import { createDb, migrate, type Db } from './db/db.js';
 import type { Order } from './db/repo.js';
 import { createDiscordClient, wireDiscord } from './discord/bot.js';
-import { handleThreadReply, mirrorMessages, type ThreadSink } from './discord/buyerThreads.js';
+import { handleThreadReply, mirrorMessages, ThreadGoneError, type ThreadSink } from './discord/buyerThreads.js';
 import type { ListingDeps } from './discord/newListing.js';
 import { makeReporter } from './discord/status.js';
-import { announceOrders, formatToShip, handleToShipReaction } from './discord/toShip.js';
+import { announceOrders, formatToShip, handleToShipReaction, sendPendingToMom } from './discord/toShip.js';
 import { startScheduler } from './jobs/schedule.js';
 import { runPoll } from './jobs/schedule.js';
 import { markShipped, type ShipDeps } from './orders/markShipped.js';
 import { createEbay, type EbayClient } from './platforms/ebay/client.js';
 import { createListing, suggestCategory, uploadImage } from './platforms/ebay/listings.js';
 import { fetchNewMessages, sendReply } from './platforms/ebay/messages.js';
-import { fetchNewOrders, uploadTracking } from './platforms/ebay/orders.js';
+import { createFulfillment, fetchNewOrders } from './platforms/ebay/orders.js';
 import { createMomBot } from './telegram/momBot.js';
+import { guarded } from './util/guard.js';
 
 function threadSink(client: Client, cfg: Config): ThreadSink {
   return {
@@ -29,8 +30,11 @@ function threadSink(client: Client, cfg: Config): ThreadSink {
       return thread.id;
     },
     async post(threadId, text) {
-      const thread = await client.channels.fetch(threadId);
-      if (!thread?.isThread()) throw new Error(`Buyer thread ${threadId} no longer exists`);
+      const thread = await client.channels.fetch(threadId).catch((e) => {
+        if (e?.code === 10003) return null; // Discord "Unknown Channel": the thread was deleted
+        throw e;
+      });
+      if (!thread?.isThread()) throw new ThreadGoneError(threadId);
       if (thread.archived) await thread.setArchived(false);
       await thread.send(text);
     },
@@ -85,10 +89,11 @@ async function main() {
     db,
     linkCode: cfg.momLinkCode,
     markShipped: (orderId, by, tracking) => markShipped(orderId, by, tracking, shipDeps),
+    onLinked: () => sendPendingToMom({ db, notifyMom: (o) => momBot.notifyMom(o), report }),
   });
   shipDeps = {
     db,
-    uploadTracking: { ebay: (o: Order, t, c) => uploadTracking(ebay, o, t, c) },
+    fulfill: { ebay: (o: Order, t, c) => createFulfillment(ebay, o, t, c) },
     markDiscord: async (o, label) => {
       if (!o.discordMessageId) return;
       const channel = await discord.channels.fetch(cfg.channels.toShip);
@@ -122,12 +127,19 @@ async function main() {
         db,
         markShipped: (id, by, tracking) => markShipped(id, by, tracking, shipDeps),
       }),
+  }, report);
+
+  process.on('unhandledRejection', (e) => {
+    console.error('Unhandled error:', e);
+    void report(`Unexpected error: ${(e as Error)?.message ?? e}`);
   });
 
   const sink = threadSink(discord, cfg);
   discord.once(Events.ClientReady, async (c) => {
     console.log(`Discord connected as ${c.user.tag}`);
-    momBot.start();
+    momBot.start((e) =>
+      void report(`Mom's Telegram bot stopped: ${(e as Error)?.message ?? e}. Check TELEGRAM_TOKEN, then restart with \`docker compose restart app\`.`),
+    );
     const boss = await startScheduler(cfg.databaseUrl, [
       {
         name: 'poll-ebay-messages',
@@ -140,8 +152,8 @@ async function main() {
       },
       {
         name: 'poll-ebay-orders',
-        run: () =>
-          runPoll(db, 'poll-ebay-orders', {
+        run: async () => {
+          await runPoll(db, 'poll-ebay-orders', {
             fetch: (since) => fetchNewOrders(ebay, since),
             handle: (orders) =>
               announceOrders('ebay', orders, {
@@ -153,7 +165,9 @@ async function main() {
                 notifyMom: (o) => momBot.notifyMom(o),
               }),
             report,
-          }),
+          });
+          await guarded('Sending sales to Mom', () => sendPendingToMom({ db, notifyMom: (o) => momBot.notifyMom(o), report }), report);
+        },
       },
     ]);
 

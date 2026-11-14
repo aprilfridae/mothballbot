@@ -77,3 +77,20 @@ describe('sendReply', () => {
     expect(f.calls[1].body).toEqual({ conversationId: 'C1', messageText: 'Yes, still available!' });
   });
 });
+
+describe('fetchNewMessages paging', () => {
+  it('asks only for conversations since the cursor and follows next links', async () => {
+    const page2 = 'https://api.ebay.com/commerce/message/v1/conversation?conversation_type=FROM_MEMBERS&offset=50&limit=50';
+    const conv = (id: string) => ({ conversationId: id, latestMessage: { createdDate: '2026-11-13T20:05:00.000Z' } });
+    const f = fakeFetch([
+      ['POST oauth2/token', () => tokenResponse()],
+      ['GET offset=50', () => json({ conversations: [conv('C2')] })],
+      ['GET /commerce/message/v1/conversation/C1', () => json({ messages: [{ messageId: 'A', senderUsername: 'sam', messageBody: 'p1', createdDate: '2026-11-13T20:01:00.000Z' }], next: 'https://api.ebay.com/commerce/message/v1/conversation/C1?conversation_type=FROM_MEMBERS&offset=50' })],
+      ['GET /commerce/message/v1/conversation/C2', () => json({ messages: [{ messageId: 'C', senderUsername: 'jo', messageBody: 'p3', createdDate: '2026-11-13T20:03:00.000Z' }] })],
+      ['GET /commerce/message/v1/conversation?', () => json({ conversations: [conv('C1')], next: page2 })],
+    ]);
+    const msgs = await fetchNewMessages(createEbay(creds, f.fetch), 'shop', new Date('2026-11-13T20:00:00Z'));
+    expect(f.calls[1].url).toContain('start_time=2026-11-13T20%3A00%3A00.000Z');
+    expect(msgs.map((m) => m.body)).toEqual(expect.arrayContaining(['p1', 'p3']));
+  });
+});

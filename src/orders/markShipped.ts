@@ -1,27 +1,27 @@
 import type { Db } from '../db/db.js';
 import * as repo from '../db/repo.js';
 import type { Order, Platform } from '../db/repo.js';
+import { PLATFORM_LABEL } from '../platforms/types.js';
 import { detectCarrier, normalizeTracking } from '../shipping/detectCarrier.js';
 
 export type ShipResult = 'shipped' | 'already' | 'tracking-added';
 
 export interface ShipDeps {
   db: Db;
-  uploadTracking: Partial<
-    Record<Platform, (order: Order, tracking: string, carrier: string) => Promise<void>>
-  >;
+  /** Tells the marketplace the order shipped, with tracking when there is a recognised carrier. */
+  fulfill: Partial<Record<Platform, (order: Order, tracking: string | null, carrier: string | null) => Promise<void>>>;
   /** Edits the order's #to-ship post with a status line. */
   markDiscord: (order: Order, label: string) => Promise<void>;
   /** Edits Mom's Telegram sale message with a status line. */
   markTelegram: (order: Order, label: string) => Promise<void>;
 }
 
-async function pushTracking(order: Order, tracking: string, deps: ShipDeps): Promise<string | null> {
-  const carrier = detectCarrier(tracking);
-  const upload = deps.uploadTracking[order.platform];
-  if (!carrier || !upload) return null;
+async function tellPlatform(order: Order, tracking: string | null, deps: ShipDeps): Promise<string | null> {
+  const fulfill = deps.fulfill[order.platform];
+  if (!fulfill) return null;
+  const carrier = tracking ? detectCarrier(tracking) : null;
   try {
-    await upload(order, tracking, carrier);
+    await fulfill(order, carrier ? tracking : null, carrier);
     return null;
   } catch (e) {
     return (e as Error).message;
@@ -57,7 +57,9 @@ export async function markShipped(
   }
 
   const order = (await repo.getOrder(deps.db, orderId))!;
-  const uploadError = tracking ? await pushTracking(order, tracking, deps) : null;
+  // A new shipment always tells the platform; adding tracking later only matters when the carrier is known.
+  const needsCall = result === 'shipped' || (tracking !== null && detectCarrier(tracking) !== null);
+  const uploadError = needsCall ? await tellPlatform(order, tracking, deps) : null;
 
   const who = order.shippedBy === 'mom' ? 'Mom' : 'you';
   let discordLabel = `📦 Shipped (by ${who})`;
@@ -67,8 +69,9 @@ export async function markShipped(
     momLabel += ` · tracking ${order.tracking}`;
   }
   if (uploadError) {
-    discordLabel += ` · ⚠️ couldn't add tracking to eBay: ${uploadError}`;
-    momLabel += ` (couldn't add tracking to eBay: ${uploadError})`;
+    const platform = PLATFORM_LABEL[order.platform];
+    discordLabel += ` · ⚠️ couldn't update ${platform}: ${uploadError}`;
+    momLabel += ` (couldn't update ${platform}: ${uploadError})`;
   }
 
   await safely(() => deps.markDiscord(order, discordLabel));

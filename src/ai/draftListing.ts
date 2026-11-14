@@ -1,3 +1,4 @@
+import sharp from 'sharp';
 import { z } from 'zod';
 
 export const MODEL = 'claude-haiku-5-5';
@@ -38,7 +39,23 @@ Reply with ONLY a JSON object, no other text, with these fields:
 - "categoryQuery": 2-4 words describing the item category, e.g. "mens hoodie"
 Never invent details you can't see or that the seller didn't state.`;
 
-const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+/** Photo types the AI can look at. iPhone HEIC can't be decoded here, so those listings are drafted from the title. */
+export const AI_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+const MAX_SIDE = 1568;
+
+/** Shrinks a photo to a size the AI accepts and re-encodes it as JPEG; null if it can't be read. */
+async function prepareForAi(data: Buffer): Promise<string | null> {
+  try {
+    const out = await sharp(data)
+      .rotate()
+      .resize({ width: MAX_SIDE, height: MAX_SIDE, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 82 })
+      .toBuffer();
+    return out.toString('base64');
+  } catch {
+    return null;
+  }
+}
 
 export function truncateTitle(title: string, max = 80): string {
   const t = title.trim();
@@ -62,13 +79,11 @@ function extractJson(text: string): unknown {
 }
 
 export async function draftListing(input: DraftInput, client: AnthropicLike): Promise<ListingDraft> {
-  const images = input.photos
-    .filter((p) => IMAGE_TYPES.has(p.mime))
-    .slice(0, 8)
-    .map((p) => ({
-      type: 'image',
-      source: { type: 'base64', media_type: p.mime, data: p.data.toString('base64') },
-    }));
+  const images = [];
+  for (const p of input.photos.filter((p) => AI_IMAGE_TYPES.has(p.mime)).slice(0, 8)) {
+    const data = await prepareForAi(p.data);
+    if (data) images.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data } });
+  }
 
   const res = await client.messages.create({
     model: MODEL,
