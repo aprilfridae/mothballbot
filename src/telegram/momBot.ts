@@ -6,7 +6,7 @@ import * as repo from '../db/repo.js';
 import type { Order, Platform, ShipTo } from '../db/repo.js';
 import type { ShipResult } from '../orders/markShipped.js';
 import { PLATFORM_LABEL } from '../platforms/types.js';
-import { detectCarrier, normalizeTracking } from '../shipping/detectCarrier.js';
+import { extractTracking } from '../shipping/detectCarrier.js';
 import type { Item } from '../db/repo.js';
 import {
   albumPhotos,
@@ -100,10 +100,11 @@ export async function handleMomReply(
     const r = await deps.markShipped(order.id, 'mom', null);
     return r === 'already' ? 'That one was already marked shipped 👍' : 'Got it ✅ marked shipped.';
   }
-  if (!detectCarrier(text)) {
+  const found = extractTracking(text);
+  if (!found) {
     return "That doesn't look like a tracking number. Copy it from the shipping label or receipt and reply again.";
   }
-  const r = await deps.markShipped(order.id, 'mom', normalizeTracking(text));
+  const r = await deps.markShipped(order.id, 'mom', found.tracking);
   return r === 'already' ? 'That one already has tracking 👍' : `Got it ✅ ${order.itemTitle} marked shipped with tracking.`;
 }
 

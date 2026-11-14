@@ -63,3 +63,14 @@ describe('parseIntake', () => {
     expect(parseIntake('   ').ok).toBe(false);
   });
 });
+
+describe('parseIntake malformed prices', () => {
+  it('does not read "$1,2000" as $1', () => {
+    const r = parseIntake('Spode platter $1,2000');
+    expect(r).toMatchObject({ ok: true, priceCents: null });
+  });
+
+  it('still reads a price followed by a comma', () => {
+    expect(parseIntake('Nike hoodie $35, size L')).toMatchObject({ priceCents: 3500 });
+  });
+});

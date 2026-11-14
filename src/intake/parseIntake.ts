@@ -5,7 +5,7 @@ export type IntakeResult =
 const HINT =
   'Send photos with what the item is on the first line, then any details (maker, pattern, era, marks, flaws). Add a backstamp photo if there is one. A price like `$35` is optional.';
 
-const DOLLAR_PRICE = /\$\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(?!\d)/;
+const DOLLAR_PRICE = /\$\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(?!\d)(?!,\d)/;
 
 function toCents(whole: string, fraction: string | undefined): number {
   const dollars = Number(whole.replace(/,/g, ''));

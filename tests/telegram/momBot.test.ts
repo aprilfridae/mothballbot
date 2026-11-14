@@ -92,6 +92,13 @@ describe('handleMomReply', () => {
     expect(answer).toContain('Got it');
   });
 
+  it('finds the tracking number inside a sentence or a scanned barcode', async () => {
+    const o = await linkedOrder();
+    const { d, shipped } = deps();
+    await handleMomReply(MOM, 777, 'tracking is 420627019400111899223197428490 :)', d);
+    expect(shipped).toEqual([{ orderId: o.id, by: 'mom', tracking: '9400111899223197428490' }]);
+  });
+
   it('accepts "shipped" typed as a reply too', async () => {
     const o = await linkedOrder();
     const { d, shipped } = deps();
