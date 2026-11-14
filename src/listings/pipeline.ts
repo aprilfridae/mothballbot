@@ -58,6 +58,9 @@ export async function createDraft(
     await repo.updateItemDraft(deps.db, itemId, { ...draft, skipped });
     const research = await deps.research({ details: item.details || item.title, draft });
     await repo.setItemResearch(deps.db, itemId, research);
+    if (research.error) {
+      await deps.report(`Price research failed for item #${itemId} (Mom will set the price): ${research.error}`);
+    }
     if (item.priceCents === null && research.suggestedCents !== null) {
       await repo.updateItemPrice(deps.db, itemId, research.suggestedCents);
     }

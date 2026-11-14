@@ -77,10 +77,11 @@ export function formatDraftForMom(item: Item, listingError: string | null, liveU
   let priceLine: string;
   if (item.priceCents === null) priceLine = '💲 No price yet — tap Edit → Price';
   else {
-    const extras = [
-      r?.lowCents != null && r?.highCents != null ? `range ${money(r.lowCents)}–${money(r.highCents)}` : null,
-      r?.suggestedCents != null ? `confidence ${r.confidence}` : null,
-    ].filter(Boolean);
+    const range = r?.lowCents != null && r?.highCents != null ? `range ${money(r.lowCents)}–${money(r.highCents)}` : null;
+    const fromSeller = r?.suggestedCents != null && r.suggestedCents !== item.priceCents;
+    const extras = fromSeller
+      ? [`seller's price · research suggests ${money(r!.suggestedCents!)}${range ? `, ${range}` : ''}`, `confidence ${r!.confidence}`]
+      : [range, r?.suggestedCents != null ? `confidence ${r.confidence}` : null].filter(Boolean);
     priceLine = `💲 ${money(item.priceCents)}${extras.length ? ` (${extras.join(' · ')})` : ''}`;
   }
 
@@ -197,16 +198,40 @@ export async function handleListingCallback(chatId: number, data: string, deps: 
   return null;
 }
 
+interface EditState {
+  itemId: number;
+  field: EditableField;
+  /** The bot's question; only replies to it count, so a stray message (e.g. a tracking number) can't become a field. */
+  promptMessageId?: number;
+}
+
+/** Records which message asked Mom for the value. */
+export async function setEditPrompt(db: Db, promptMessageId: number): Promise<void> {
+  const raw = await repo.getSetting(db, EDITING_KEY);
+  if (!raw) return;
+  await repo.setSetting(db, EDITING_KEY, JSON.stringify({ ...(JSON.parse(raw) as EditState), promptMessageId }));
+}
+
 /** Typed text while Mom is editing a field. Returns null when no edit is active (so other handlers can run). */
-export async function handleListingText(chatId: number, text: string, deps: MomListingDeps): Promise<MomAction | null> {
+export async function handleListingText(
+  chatId: number,
+  replyToId: number | null,
+  text: string,
+  deps: MomListingDeps,
+): Promise<MomAction | null> {
   if (!(await isMom(deps.db, chatId))) return null;
   const raw = await repo.getSetting(deps.db, EDITING_KEY);
   if (!raw) return null;
-  const { itemId, field } = JSON.parse(raw) as { itemId: number; field: EditableField };
+  const { itemId, field, promptMessageId } = JSON.parse(raw) as EditState;
 
   if (/^\s*cancel\s*$/i.test(text)) {
     await repo.deleteSetting(deps.db, EDITING_KEY);
     return { answer: 'OK, no changes.', keyboard: 'draft', itemId };
+  }
+  if (promptMessageId !== undefined && replyToId !== promptMessageId) {
+    return {
+      answer: `To change the ${FIELD_LABEL[field].toLowerCase()}, reply to my question above (swipe left on it). Or type cancel.`,
+    };
   }
   const r = await applyEdit(deps.db, itemId, field, text);
   if (!r.ok) {
@@ -216,4 +241,9 @@ export async function handleListingText(chatId: number, text: string, deps: MomL
   }
   await repo.deleteSetting(deps.db, EDITING_KEY);
   return { answer: `${FIELD_LABEL[field]} updated ✅`, refresh: itemId, keyboard: 'draft', itemId };
+}
+
+/** Toast to show immediately for slow actions; the real outcome then shows on the draft (or as a message). */
+export function earlyAnswer(data: string): string | null {
+  return /^lpost:\d+$/.test(data) ? 'Posting to eBay…' : null;
 }

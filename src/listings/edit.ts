@@ -92,7 +92,11 @@ export async function applyEdit(db: Db, itemId: number, field: EditableField, va
       break;
     }
     case 'specifics': {
-      draft.aspects = parseSpecifics(value);
+      const aspects = parseSpecifics(value);
+      if (!Object.keys(aspects).length) {
+        return { ok: false, error: 'Send one per line as Name: value, like "Color: Blue" or "Pattern: Blue Italian".' };
+      }
+      draft.aspects = aspects;
       draft.brand = draft.aspects.Brand?.[0] ?? draft.brand;
       break;
     }

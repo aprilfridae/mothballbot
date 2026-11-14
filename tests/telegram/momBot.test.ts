@@ -155,7 +155,7 @@ import { routeMomText } from '../../src/telegram/momBot.js';
 import { EDITING_KEY } from '../../src/telegram/momListings.js';
 
 describe('routeMomText', () => {
-  const listing = (calls: string[]) => async (_chat: number, text: string) => (calls.push(text), { answer: 'Title updated ✅' });
+  const listing = (calls: string[]) => async (_chat: number, _reply: number | null, text: string) => (calls.push(text), { answer: 'Title updated ✅' });
 
   it('treats a reply to a sale message as shipping, even while a listing edit is active', async () => {
     const o = await linkedOrder();

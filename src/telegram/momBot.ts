@@ -1,4 +1,6 @@
 import { Bot, InlineKeyboard, InputFile, InputMediaBuilder } from 'grammy';
+import sharp from 'sharp';
+import { deliverDraft } from '../listings/pending.js';
 import type { Db } from '../db/db.js';
 import * as repo from '../db/repo.js';
 import type { Order, Platform, ShipTo } from '../db/repo.js';
@@ -10,10 +12,12 @@ import {
   albumPhotos,
   conditionKeyboard,
   draftKeyboard,
+  earlyAnswer,
   fieldKeyboard,
   formatDraftForMom,
   handleListingCallback,
   handleListingText,
+  setEditPrompt,
   type KeyRows,
   type MomAction,
   type MomListingDeps,
@@ -112,13 +116,13 @@ export async function routeMomText(
   replyToId: number | null,
   text: string,
   deps: MomDeps,
-  listingText: (chatId: number, text: string) => Promise<MomAction | null>,
+  listingText: (chatId: number, replyToId: number | null, text: string) => Promise<MomAction | null>,
 ): Promise<MomAction | null> {
   if (replyToId !== null && (await repo.findOrderByTelegramMessage(deps.db, replyToId))) {
     const answer = await handleMomReply(chatId, replyToId, text, deps);
     return answer ? { answer } : null;
   }
-  const action = await listingText(chatId, text);
+  const action = await listingText(chatId, replyToId, text);
   if (action) return action;
   const answer = await handleMomReply(chatId, replyToId, text, deps);
   return answer ? { answer } : null;
@@ -187,7 +191,10 @@ export function createMomBot(token: string, deps: MomDeps, listings: MomListingD
       }
     }
     if (action.prompt) {
-      await bot.api.sendMessage(chatId, action.prompt, { reply_markup: { force_reply: true, input_field_placeholder: 'Type here…' } });
+      const sent = await bot.api.sendMessage(chatId, action.prompt, {
+        reply_markup: { force_reply: true, input_field_placeholder: 'Type here…' },
+      });
+      await setEditPrompt(deps.db, sent.message_id);
     }
   }
 
@@ -198,10 +205,14 @@ export function createMomBot(token: string, deps: MomDeps, listings: MomListingD
 
   bot.on('callback_query:data', async (ctx) => {
     const chatId = ctx.chat?.id ?? ctx.from.id;
+    const early = (await repo.getSetting(deps.db, MOM_CHAT_KEY)) === String(chatId) ? earlyAnswer(ctx.callbackQuery.data) : null;
+    if (early) await ctx.answerCallbackQuery({ text: early });
     try {
       const listingAction = await handleListingCallback(chatId, ctx.callbackQuery.data, listings);
       if (listingAction) {
-        await ctx.answerCallbackQuery(listingAction.answer ? { text: listingAction.answer } : undefined);
+        if (!early) await ctx.answerCallbackQuery(listingAction.answer ? { text: listingAction.answer } : undefined);
+        // The tap was already answered; outcomes without a refreshed draft (e.g. "set a price first") go as a message.
+        else if (listingAction.answer && listingAction.refresh === undefined) await bot.api.sendMessage(chatId, listingAction.answer);
         await perform(chatId, listingAction);
         return;
       }
@@ -209,7 +220,8 @@ export function createMomBot(token: string, deps: MomDeps, listings: MomListingD
       await ctx.answerCallbackQuery(answer ? { text: answer } : undefined);
     } catch (e) {
       // Always answer, so Mom never sees an endless spinner.
-      await ctx.answerCallbackQuery({ text: 'Something went wrong. Try again in a minute.' }).catch(() => {});
+      if (early) await bot.api.sendMessage(chatId, 'Something went wrong. Try again in a minute.').catch(() => {});
+      else await ctx.answerCallbackQuery({ text: 'Something went wrong. Try again in a minute.' }).catch(() => {});
       throw e;
     }
   });
@@ -220,7 +232,7 @@ export function createMomBot(token: string, deps: MomDeps, listings: MomListingD
       ctx.message.reply_to_message?.message_id ?? null,
       ctx.message.text,
       deps,
-      (chatId, text) => handleListingText(chatId, text, listings),
+      (chatId, replyToId, text) => handleListingText(chatId, replyToId, text, listings),
     );
     if (!action) return;
     if (action.answer) await ctx.reply(action.answer, { reply_parameters: { message_id: ctx.message.message_id } });
@@ -233,15 +245,31 @@ export function createMomBot(token: string, deps: MomDeps, listings: MomListingD
     async sendDraftToMom(item) {
       const chatId = await momChatId(deps.db);
       if (chatId === null) return null;
-      const photos = albumPhotos(item);
-      const files = await Promise.all(photos.map(async (p) => new InputFile(await listings.pipeline.readPhoto(p))));
-      if (files.length === 1) await bot.api.sendPhoto(chatId, files[0]);
-      else if (files.length > 1) await bot.api.sendMediaGroup(chatId, files.map((f) => InputMediaBuilder.photo(f)));
-      const sent = await bot.api.sendMessage(chatId, await draftText(item), {
-        reply_markup: toKeyboard(draftKeyboard(item)),
-        link_preview_options: { is_disabled: true },
-      });
-      return sent.message_id;
+      return deliverDraft(
+        async () => {
+          // Re-encode so big camera originals stay under Telegram's photo limits.
+          const files = await Promise.all(
+            albumPhotos(item).map(async (p) => {
+              const data = await sharp(await listings.pipeline.readPhoto(p))
+                .rotate()
+                .resize({ width: 2048, height: 2048, fit: 'inside', withoutEnlargement: true })
+                .jpeg({ quality: 85 })
+                .toBuffer();
+              return new InputFile(data, 'photo.jpg');
+            }),
+          );
+          if (files.length === 1) await bot.api.sendPhoto(chatId, files[0]);
+          else if (files.length > 1) await bot.api.sendMediaGroup(chatId, files.map((f) => InputMediaBuilder.photo(f)));
+        },
+        async (note) => {
+          const text = await draftText(item);
+          const sent = await bot.api.sendMessage(chatId, note ? `${text}\n${note}`.slice(0, 4096) : text, {
+            reply_markup: toKeyboard(draftKeyboard(item)),
+            link_preview_options: { is_disabled: true },
+          });
+          return sent.message_id;
+        },
+      );
     },
     refreshDraft,
     async notifyMom(order) {

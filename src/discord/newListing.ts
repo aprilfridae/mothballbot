@@ -41,7 +41,8 @@ function statusLine(item: Item, listings: ListingRow[], momLinked: boolean): str
     case 'researching':
       return '🔎 Researching price…';
     case 'awaiting_mom':
-      return momLinked ? `📨 Sent to Mom · ${priceLine(item)}` : `⏳ Waiting for Mom to connect Telegram · ${priceLine(item)}`;
+      if (item.telegramMessageId !== null) return `📨 Sent to Mom · ${priceLine(item)}`;
+      return momLinked ? `📨 Sending to Mom… · ${priceLine(item)}` : `⏳ Waiting for Mom to connect Telegram · ${priceLine(item)}`;
     case 'posting':
       return '⏫ Posting…';
     case 'live':
@@ -49,7 +50,11 @@ function statusLine(item: Item, listings: ListingRow[], momLinked: boolean): str
     case 'rejected':
       return '🗑 Rejected by Mom';
     case 'error':
-      return `⚠️ Waiting on Mom: ${ebay?.error ?? item.research?.reasoning ?? 'something went wrong'}`;
+      if (ebay?.error) return `⚠️ Waiting on Mom: ${ebay.error}`;
+      // No eBay error means the draft itself never reached Mom; only you can fix that.
+      return `⚠️ ${item.research?.reasoning ?? 'Something went wrong.'}${
+        item.research?.reasoning?.includes('post it again') || item.research?.reasoning?.includes('Post it again') ? '' : ' Post it again in #new-listing.'
+      }`;
   }
 }
 

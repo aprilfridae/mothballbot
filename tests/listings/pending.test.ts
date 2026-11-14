@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { createDb, type Db } from '../../src/db/db.js';
 import * as repo from '../../src/db/repo.js';
 import { resetDb } from '../helpers/db.js';
-import { sendPendingDrafts, recoverInterruptedPosts } from '../../src/listings/pending.js';
+import { sendPendingDrafts, recoverInterrupted, deliverDraft } from '../../src/listings/pending.js';
 
 let db: Db;
 beforeAll(() => {
@@ -49,13 +49,79 @@ describe('sendPendingDrafts', () => {
   });
 });
 
-describe('recoverInterruptedPosts', () => {
+describe('sendPendingDrafts safety', () => {
+  it('sends each draft once even when called again while a send is still uploading', async () => {
+    const a = await item('awaiting_mom');
+    const sent: number[] = [];
+    const opts = {
+      db,
+      sendDraftToMom: async (i: repo.Item) => {
+        await new Promise((r) => setTimeout(r, 30));
+        sent.push(i.id);
+        return 500 + i.id;
+      },
+      report: async () => {},
+    };
+    await Promise.all([sendPendingDrafts(opts), sendPendingDrafts(opts), sendPendingDrafts(opts)]);
+    expect(sent).toEqual([a.id]);
+  });
+
+  it('keeps going past a draft that fails, reports it once, and tells the views', async () => {
+    const bad = await item('awaiting_mom');
+    const good = await item('awaiting_mom');
+    const reports: string[] = [];
+    const updated: Array<[number, number | null]> = [];
+    const opts = {
+      db,
+      sendDraftToMom: async (i: repo.Item) => {
+        if (i.id === bad.id) throw new Error('Bad Request: file too large');
+        return 700;
+      },
+      report: async (t: string) => void reports.push(t),
+      onSent: async (i: repo.Item) => void updated.push([i.id, i.telegramMessageId]),
+    };
+    await sendPendingDrafts(opts);
+    await sendPendingDrafts(opts);
+    expect(updated).toEqual([[good.id, 700]]);
+    expect(reports).toEqual([expect.stringContaining('file too large')]);
+  });
+});
+
+describe('deliverDraft', () => {
+  it('still sends the draft text when the photo album fails', async () => {
+    const texts: string[] = [];
+    const id = await deliverDraft(
+      async () => {
+        throw new Error('Bad Request: PHOTO_INVALID_DIMENSIONS');
+      },
+      async (note) => (texts.push(note), 42),
+    );
+    expect(id).toBe(42);
+    expect(texts[0]).toContain("photos couldn't be sent");
+  });
+
+  it('adds no note when the album works', async () => {
+    const texts: string[] = [];
+    await deliverDraft(async () => {}, async (note) => (texts.push(note), 1));
+    expect(texts).toEqual(['']);
+  });
+});
+
+describe('recoverInterrupted', () => {
   it('moves items stuck in "posting" (after a restart) to an error Mom can see', async () => {
     const stuck = await item('posting');
     const fine = await item('awaiting_mom');
-    expect(await recoverInterruptedPosts(db)).toEqual([stuck.id]);
+    expect(await recoverInterrupted(db)).toEqual([stuck.id]);
     expect((await repo.getItem(db, stuck.id))!.status).toBe('error');
     expect((await repo.getListings(db, stuck.id))[0].error).toContain('check eBay');
     expect((await repo.getItem(db, fine.id))!.status).toBe('awaiting_mom');
+  });
+
+  it('marks drafts that were still being researched as needing to be posted again', async () => {
+    const stuck = await item('researching');
+    expect(await recoverInterrupted(db)).toEqual([stuck.id]);
+    const after = (await repo.getItem(db, stuck.id))!;
+    expect(after.status).toBe('error');
+    expect(after.research?.reasoning).toContain('post it again');
   });
 });

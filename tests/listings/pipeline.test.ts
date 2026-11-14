@@ -107,6 +107,16 @@ describe('createDraft', () => {
     expect(done.status).toBe('awaiting_mom');
   });
 
+  it('reports a research service failure to #bot-status but still hands the draft to Mom', async () => {
+    const item = await newItem(null);
+    const { deps, log } = makeDeps({
+      research: async () => ({ ...research, suggestedCents: null, comparables: [], reasoning: "Price research didn't work this time, so please set the price.", error: '400 web search is disabled' }),
+    });
+    const done = await createDraft(item.id, [], [], deps);
+    expect(done.status).toBe('awaiting_mom');
+    expect(log.reports).toEqual([expect.stringContaining('web search is disabled')]);
+  });
+
   it('marks the item as an error (and still notifies) when drafting fails', async () => {
     const item = await newItem(null);
     const { deps, log } = makeDeps({

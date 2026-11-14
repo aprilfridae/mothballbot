@@ -59,9 +59,14 @@ function failed(reason: string): PriceResearch {
   };
 }
 
-function lastJson(content: Array<{ type: string; text?: string }>): unknown {
-  const texts = content.filter((b) => b.type === 'text' && b.text?.trim());
-  const text = texts.at(-1)?.text ?? '';
+/** The answer is the text after the last search result; citations can split it across several text blocks. */
+function answerJson(content: Array<{ type: string; text?: string }>): unknown {
+  const lastResult = content.map((b) => b.type).lastIndexOf('web_search_tool_result');
+  const text = content
+    .slice(lastResult + 1)
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text ?? '')
+    .join('');
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   const body = fenced ? fenced[1] : text;
   const start = body.indexOf('{');
@@ -105,7 +110,7 @@ export async function researchPrice(input: { details: string; draft: ListingDraf
       });
     }
 
-    const parsed = AnswerSchema.safeParse(lastJson(res.content));
+    const parsed = AnswerSchema.safeParse(answerJson(res.content));
     if (!parsed.success) return failed('the research did not return a usable answer.');
 
     const comparables = parsed.data.comparables
@@ -125,6 +130,10 @@ export async function researchPrice(input: { details: string; draft: ListingDraf
     };
   } catch (e) {
     console.error('Price research failed:', e);
-    return failed((e as Error).message || 'the research service failed.');
+    return {
+      ...failed(''),
+      reasoning: "Price research didn't work this time, so please set the price.",
+      error: (e as Error).message || String(e),
+    };
   }
 }

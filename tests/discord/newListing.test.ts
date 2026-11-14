@@ -59,10 +59,11 @@ function intake(over: Partial<IntakeMessage> = {}) {
 
 const embedOf = (p: any) => p.embeds[0];
 
-async function itemWith(over: { status: repo.ItemStatus; priceCents?: number | null; research?: any; listingUrl?: string; listingError?: string }) {
+async function itemWith(over: { status: repo.ItemStatus; priceCents?: number | null; research?: any; listingUrl?: string; listingError?: string; sentToMom?: boolean }) {
   const item = await repo.insertItem(db, { title: 'Spode platter', details: 'x', priceCents: over.priceCents ?? null, photos: ['/a', '/b'] });
   await repo.setItemStatus(db, item.id, over.status);
   if (over.research) await repo.setItemResearch(db, item.id, over.research);
+  if (over.sentToMom) await repo.setItemTelegramMessage(db, item.id, 55);
   if (over.listingUrl) await repo.upsertListing(db, item.id, 'ebay', { externalId: '1', url: over.listingUrl, status: 'live', error: null });
   if (over.listingError) await repo.upsertListing(db, item.id, 'ebay', { externalId: null, url: null, status: 'error', error: over.listingError });
   return { item: (await repo.getItem(db, item.id))!, listings: await repo.getListings(db, item.id) };
@@ -138,12 +139,19 @@ describe('buildStatus', () => {
   const line = (p: any) => embedOf(p).description as string;
 
   it('shows the suggested price and range once sent to Mom', async () => {
-    const { item, listings } = await itemWith({ status: 'awaiting_mom', priceCents: 4500, research });
+    const { item, listings } = await itemWith({ status: 'awaiting_mom', priceCents: 4500, research, sentToMom: true });
     expect(line(buildStatus(item, listings, true))).toContain('📨 Sent to Mom · suggested $45.00 ($30.00–$60.00)');
   });
 
+  it('only says "Sent to Mom" once Telegram actually accepted the draft', async () => {
+    const { item, listings } = await itemWith({ status: 'awaiting_mom', priceCents: 4500, research });
+    const text = line(buildStatus(item, listings, true));
+    expect(text).toContain('📨 Sending to Mom…');
+    expect(text).not.toContain('Sent to Mom');
+  });
+
   it("says Mom will set the price when research found nothing", async () => {
-    const { item, listings } = await itemWith({ status: 'awaiting_mom', research: { ...research, suggestedCents: null, lowCents: null, highCents: null } });
+    const { item, listings } = await itemWith({ status: 'awaiting_mom', research: { ...research, suggestedCents: null, lowCents: null, highCents: null }, sentToMom: true });
     expect(line(buildStatus(item, listings, true))).toContain("no comparables found, she'll set the price");
   });
 
@@ -176,9 +184,12 @@ describe('buildStatus', () => {
     expect(line(buildStatus(item, listings, true))).toContain('⚠️ Waiting on Mom: eBay needs these item specifics: Color.');
   });
 
-  it('shows a drafting failure', async () => {
+  it('tells you (not Mom) to post again when drafting failed', async () => {
     const { item, listings } = await itemWith({ status: 'error', research: { ...research, suggestedCents: null, reasoning: "Couldn't draft this listing: boom" } });
-    expect(line(buildStatus(item, listings, true))).toContain("Couldn't draft this listing: boom");
+    const text = line(buildStatus(item, listings, true));
+    expect(text).toContain("Couldn't draft this listing: boom");
+    expect(text).toContain('Post it again in #new-listing');
+    expect(text).not.toContain('Waiting on Mom');
   });
 
   it('never has buttons', async () => {

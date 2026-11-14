@@ -20,7 +20,7 @@ import { createListing, suggestCategory, uploadImage } from './platforms/ebay/li
 import { fetchNewMessages, sendReply } from './platforms/ebay/messages.js';
 import { createFulfillment, fetchNewOrders } from './platforms/ebay/orders.js';
 import { researchPrice } from './ai/researchPrice.js';
-import { recoverInterruptedPosts, sendPendingDrafts } from './listings/pending.js';
+import { recoverInterrupted, sendPendingDrafts } from './listings/pending.js';
 import { createDraft, type PipelineDeps } from './listings/pipeline.js';
 import { createMomBot, MOM_CHAT_KEY, type MomBot } from './telegram/momBot.js';
 import { guarded } from './util/guard.js';
@@ -93,29 +93,21 @@ function listingDeps(db: Db, cfg: Config, pipeline: PipelineDeps): ListingDeps {
   };
 }
 
-/** Keeps your #new-listing status and Mom's Telegram draft in step with the item. */
-function viewUpdater(db: Db, discord: Client, cfg: Config, getMomBot: () => MomBot) {
+/** Edits your #new-listing status message to match the item. Never throws. */
+function discordStatus(db: Db, discord: Client, cfg: Config) {
   return async (item: Item) => {
-    const momLinked = (await repo.getSetting(db, MOM_CHAT_KEY)) !== null;
-    if (item.discordMessageId) {
-      await guarded(
-        `Updating the status of item #${item.id}`,
-        async () => {
-          const channel = await discord.channels.fetch(cfg.channels.newListing);
-          if (!channel?.isTextBased()) return;
-          const msg = await channel.messages.fetch(item.discordMessageId!);
-          await msg.edit(buildStatus(item, await repo.getListings(db, item.id), momLinked));
-        },
-        async (t) => console.error(t),
-      );
-    }
-    const momBot = getMomBot();
-    if (item.status === 'awaiting_mom' && item.telegramMessageId === null) {
-      const id = await momBot.sendDraftToMom(item);
-      if (id !== null) await repo.setItemTelegramMessage(db, item.id, id);
-    } else if (item.telegramMessageId !== null) {
-      await momBot.refreshDraft(item);
-    }
+    if (!item.discordMessageId) return;
+    await guarded(
+      `Updating the status of item #${item.id}`,
+      async () => {
+        const momLinked = (await repo.getSetting(db, MOM_CHAT_KEY)) !== null;
+        const channel = await discord.channels.fetch(cfg.channels.newListing);
+        if (!channel?.isTextBased()) return;
+        const msg = await channel.messages.fetch(item.discordMessageId!);
+        await msg.edit(buildStatus(item, await repo.getListings(db, item.id), momLinked));
+      },
+      async (t) => console.error(t),
+    );
   };
 }
 
@@ -132,8 +124,15 @@ async function main() {
   // Mom's bot, the shipping path and the listing pipeline reference each other, so some links are bound late.
   let shipDeps: ShipDeps;
   let momBot: MomBot;
-  const pipeline = pipelineDeps(db, cfg, ebay, anthropic, report, viewUpdater(db, discord, cfg, () => momBot));
-  const sendDrafts = () => sendPendingDrafts({ db, sendDraftToMom: (i) => momBot.sendDraftToMom(i), report });
+  const updateDiscord = discordStatus(db, discord, cfg);
+  const sendDrafts = () =>
+    sendPendingDrafts({ db, sendDraftToMom: (i) => momBot.sendDraftToMom(i), report, onSent: updateDiscord });
+  const pipeline = pipelineDeps(db, cfg, ebay, anthropic, report, async (item) => {
+    await updateDiscord(item);
+    // New drafts go through the single draft sender; drafts Mom already has are refreshed in place.
+    if (item.status === 'awaiting_mom' && item.telegramMessageId === null) await sendDrafts();
+    else if (item.telegramMessageId !== null) await momBot.refreshDraft(item);
+  });
   momBot = createMomBot(
     cfg.telegramToken,
     {
@@ -199,9 +198,9 @@ async function main() {
     await guarded(
       'Recovering interrupted listings',
       async () => {
-        const stuck = await recoverInterruptedPosts(db);
+        const stuck = await recoverInterrupted(db);
         for (const id of stuck) await pipeline.onChange((await repo.getItem(db, id))!);
-        if (stuck.length) await report(`The bot restarted while posting ${stuck.length} listing(s). Mom was asked to check eBay before posting again.`);
+        if (stuck.length) await report(`The bot restarted while ${stuck.length} listing(s) were being drafted or posted. Their status in #new-listing says what to do.`);
       },
       report,
     );

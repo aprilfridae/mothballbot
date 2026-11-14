@@ -94,6 +94,29 @@ describe('researchPrice', () => {
     expect(r.suggestedCents).toBe(4500);
   });
 
+  it('joins an answer that arrives split across several text blocks (citations)', async () => {
+    const json = JSON.stringify({ suggested: 45, low: 30, high: 60, confidence: 'high', comparables: [comp(1)], reasoning: 'ok' });
+    const cut1 = json.indexOf('"comparables"');
+    const cut2 = json.indexOf('"reasoning"');
+    const r = await researchPrice(
+      input,
+      client([
+        {
+          content: [
+            { type: 'text', text: 'Searching {first}' },
+            { type: 'server_tool_use', id: 's1', name: 'web_search', input: { query: 'q' } },
+            { type: 'web_search_tool_result', tool_use_id: 's1', content: [] },
+            { type: 'text', text: json.slice(0, cut1) },
+            { type: 'text', text: json.slice(cut1, cut2), citations: [{ type: 'web_search_result_location', url: 'https://x' }] },
+            { type: 'text', text: json.slice(cut2) },
+          ],
+        },
+      ]),
+    );
+    expect(r.suggestedCents).toBe(4500);
+    expect(r.comparables).toHaveLength(1);
+  });
+
   it('continues a paused turn so long searches finish', async () => {
     const calls: any[] = [];
     const r = await researchPrice(
@@ -114,20 +137,25 @@ describe('researchPrice', () => {
   it.each([
     ['no JSON', client([{ content: [{ type: 'text', text: 'Sorry, nothing found.' }] }])],
     ['zero comparables', client([answer({ suggested: 45, low: 30, high: 60, confidence: 'low', comparables: [], reasoning: 'guess' })])],
-    [
-      'a failing client',
-      {
-        messages: {
-          create: async () => {
-            throw new Error('overloaded');
-          },
-        },
-      } as AnthropicLike,
-    ],
   ])('returns no price instead of throwing on %s', async (_label, c) => {
     const r = await researchPrice(input, c);
     expect(r.suggestedCents).toBeNull();
     expect(r.comparables).toEqual([]);
     expect(r.reasoning.startsWith("Couldn't find comparables")).toBe(true);
+    expect(r.error).toBeUndefined();
+  });
+
+  it('flags a research service failure separately, with a friendly line for Mom', async () => {
+    const failing = {
+      messages: {
+        create: async () => {
+          throw new Error('400 web search is disabled for this organization');
+        },
+      },
+    } as AnthropicLike;
+    const r = await researchPrice(input, failing);
+    expect(r.suggestedCents).toBeNull();
+    expect(r.error).toContain('web search is disabled');
+    expect(r.reasoning).toBe("Price research didn't work this time, so please set the price.");
   });
 });

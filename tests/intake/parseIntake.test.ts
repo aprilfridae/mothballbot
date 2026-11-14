@@ -14,8 +14,19 @@ describe('parseIntake', () => {
     expect(parseIntake('$1,200 couch')).toMatchObject({ ok: true, title: 'couch', priceCents: 120000 });
   });
 
-  it('treats a trailing bare number as the price', () => {
-    expect(parseIntake('hoodie 35')).toMatchObject({ ok: true, title: 'hoodie', priceCents: 3500 });
+  it('never treats a bare number as the price (years, set sizes, model numbers)', () => {
+    expect(parseIntake('Royal Albert teacup 1952')).toMatchObject({ title: 'Royal Albert teacup 1952', priceCents: null });
+    expect(parseIntake('Noritake dinner plates set of 6')).toMatchObject({ title: 'Noritake dinner plates set of 6', priceCents: null });
+  });
+
+  it('ignores dollar amounts mentioned inside the details', () => {
+    const r = parseIntake('Hummel figurine\nsticker says $5, Replacements lists $80');
+    expect(r).toMatchObject({ priceCents: null });
+    if (r.ok) expect(r.details).toContain('$80');
+  });
+
+  it('accepts a price on a line of its own', () => {
+    expect(parseIntake('Hummel figurine\nsmall chip\n$45')).toMatchObject({ title: 'Hummel figurine', priceCents: 4500 });
   });
 
   it('does not treat a size number in the middle as the price', () => {

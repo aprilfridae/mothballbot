@@ -9,6 +9,7 @@ import {
   handleListingCallback,
   handleListingText,
   EDITING_KEY,
+  setEditPrompt,
   type MomListingDeps,
 } from '../../src/telegram/momListings.js';
 import type { PipelineDeps } from '../../src/listings/pipeline.js';
@@ -79,6 +80,7 @@ function deps() {
   return { d, log, releaseNow: () => (release ? release() : (release = () => {})) };
 }
 
+const readDraftDesc = (i: any) => (i.draft as any).description;
 const keys = (rows: { data: string }[][]) => rows.flat().map((b) => b.data);
 
 describe('formatDraftForMom', () => {
@@ -97,6 +99,11 @@ describe('formatDraftForMom', () => {
     const text = formatDraftForMom(await item({ description: 'Gorgeous. '.repeat(1000) }), null);
     expect(text.length).toBeLessThanOrEqual(4096);
     expect(text).toContain('https://www.ebay.com/itm/1');
+  });
+
+  it("shows the seller's own price next to what research suggests", async () => {
+    const text = formatDraftForMom(await item({ priceCents: 8500 }), null);
+    expect(text).toContain('💲 $85.00 (seller\'s price · research suggests $45.00, range $30.00–$60.00 · confidence medium)');
   });
 
   it('asks Mom for a price when there is none', async () => {
@@ -199,7 +206,7 @@ describe('handleListingText', () => {
     const i = await item();
     const { d } = deps();
     await handleListingCallback(MOM, `lfield:${i.id}:price`, d);
-    const r = await handleListingText(MOM, '$40', d);
+    const r = await handleListingText(MOM, null, '$40', d);
     expect(r).toMatchObject({ answer: 'Price updated ✅', refresh: i.id });
     expect((await repo.getItem(db, i.id))!.priceCents).toBe(4000);
     expect(await repo.getSetting(db, EDITING_KEY)).toBeNull();
@@ -209,7 +216,7 @@ describe('handleListingText', () => {
     const i = await item();
     const { d } = deps();
     await handleListingCallback(MOM, `lfield:${i.id}:price`, d);
-    const r = await handleListingText(MOM, 'cheap', d);
+    const r = await handleListingText(MOM, null, 'cheap', d);
     expect(r?.answer).toContain("That price didn't work");
     expect(await repo.getSetting(db, EDITING_KEY)).not.toBeNull();
   });
@@ -218,15 +225,49 @@ describe('handleListingText', () => {
     const i = await item();
     const { d } = deps();
     await handleListingCallback(MOM, `lfield:${i.id}:title`, d);
-    expect((await handleListingText(MOM, 'Cancel', d))?.answer).toBe('OK, no changes.');
+    expect((await handleListingText(MOM, null, 'Cancel', d))?.answer).toBe('OK, no changes.');
     expect(await repo.getSetting(db, EDITING_KEY)).toBeNull();
+  });
+
+  it('only takes text that replies to the question, so a stray message is never saved as a field', async () => {
+    const i = await item();
+    const { d } = deps();
+    await handleListingCallback(MOM, `lfield:${i.id}:description`, d);
+    await setEditPrompt(db, 900);
+    const stray = await handleListingText(MOM, null, '9400111899223197428490', d);
+    expect(stray?.answer).toContain('reply to my question');
+    expect((readDraftDesc(await repo.getItem(db, i.id)))).toBe('Lovely platter.');
+    const r = await handleListingText(MOM, 900, 'Hand-painted, no chips.', d);
+    expect(r?.answer).toBe('Description updated ✅');
+    expect(readDraftDesc(await repo.getItem(db, i.id))).toBe('Hand-painted, no chips.');
+  });
+
+  it('accepts "cancel" even without replying', async () => {
+    const i = await item();
+    const { d } = deps();
+    await handleListingCallback(MOM, `lfield:${i.id}:title`, d);
+    await setEditPrompt(db, 900);
+    expect((await handleListingText(MOM, null, 'cancel', d))?.answer).toBe('OK, no changes.');
   });
 
   it('does nothing when no edit is active, or for other chats', async () => {
     const i = await item();
     const { d } = deps();
-    expect(await handleListingText(MOM, 'hello', d)).toBeNull();
+    expect(await handleListingText(MOM, null, 'hello', d)).toBeNull();
     await handleListingCallback(MOM, `lfield:${i.id}:title`, d);
-    expect(await handleListingText(99, 'hello', d)).toBeNull();
+    expect(await handleListingText(99, null, 'hello', d)).toBeNull();
+  });
+});
+
+import { earlyAnswer } from '../../src/telegram/momListings.js';
+
+describe('earlyAnswer', () => {
+  it('answers a Post tap straight away (posting can outlast Telegram’s button timeout)', () => {
+    expect(earlyAnswer('lpost:7')).toBe('Posting to eBay…');
+  });
+
+  it('leaves quick actions to answer with their real result', () => {
+    expect(earlyAnswer('lrej:7')).toBeNull();
+    expect(earlyAnswer('ship:7')).toBeNull();
   });
 });

@@ -65,6 +65,15 @@ describe('applyEdit', () => {
     }
   });
 
+  it('refuses item specifics with no "Name: value" lines instead of wiping them', async () => {
+    const i = await item();
+    await applyEdit(db, i.id, 'specifics', 'Pattern: Blue Italian');
+    const r = await applyEdit(db, i.id, 'specifics', 'Blue');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('Color: Blue');
+    expect(readDraft((await repo.getItem(db, i.id))!)!.draft.aspects).toEqual({ Pattern: ['Blue Italian'] });
+  });
+
   it('caps titles at 80 characters and refuses an empty description', async () => {
     const i = await item();
     const t = await applyEdit(db, i.id, 'title', 'Antique '.repeat(20));

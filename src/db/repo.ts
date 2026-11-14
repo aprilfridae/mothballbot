@@ -11,6 +11,8 @@ export interface PriceResearch {
   confidence: 'low' | 'medium' | 'high';
   comparables: { title: string; priceCents: number; sold: boolean; site: string; url: string }[];
   reasoning: string;
+  /** Set when the research service itself failed (not just "nothing found"); the raw error for #bot-status. */
+  error?: string;
 }
 
 export interface Item {
