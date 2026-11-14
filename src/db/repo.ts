@@ -256,6 +256,19 @@ export async function markOrderShippedRow(
   return rowCount === 1;
 }
 
+export async function setOrderTrackingIfMissing(db: Db, orderId: number, tracking: string): Promise<boolean> {
+  const { rowCount } = await db.query('UPDATE orders SET tracking = $2 WHERE id = $1 AND tracking IS NULL', [
+    orderId,
+    tracking,
+  ]);
+  return rowCount === 1;
+}
+
+export async function findOrderByExternal(db: Db, platform: Platform, externalId: string): Promise<Order | null> {
+  const { rows } = await db.query('SELECT * FROM orders WHERE platform = $1 AND external_id = $2', [platform, externalId]);
+  return rows[0] ? toOrder(rows[0]) : null;
+}
+
 export async function getSetting(db: Db, key: string): Promise<string | null> {
   const { rows } = await db.query('SELECT value FROM settings WHERE key = $1', [key]);
   return rows[0]?.value ?? null;
