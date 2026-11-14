@@ -274,6 +274,10 @@ export async function getSetting(db: Db, key: string): Promise<string | null> {
   return rows[0]?.value ?? null;
 }
 
+export async function deleteSetting(db: Db, key: string): Promise<void> {
+  await db.query('DELETE FROM settings WHERE key = $1', [key]);
+}
+
 export async function setSetting(db: Db, key: string, value: string): Promise<void> {
   await db.query(
     'INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value',

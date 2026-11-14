@@ -36,10 +36,16 @@ export function createTokenSource(creds: EbayCreds, fetchFn: typeof fetch) {
     return cached.token;
   }
 
+  let inFlight: Promise<string> | null = null;
+
   return {
     async get(): Promise<string> {
       if (cached && Date.now() < cached.expiresAt) return cached.token;
-      return refresh();
+      // Concurrent callers share one refresh instead of each minting a token.
+      inFlight ??= refresh().finally(() => {
+        inFlight = null;
+      });
+      return inFlight;
     },
     invalidate() {
       cached = null;
