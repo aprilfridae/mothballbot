@@ -51,6 +51,8 @@ export interface ShipTo {
   city: string;
   state: string;
   postalCode: string;
+  /** Two-letter country code; shown only when it isn't US. */
+  country?: string;
 }
 
 export interface OrderData {
@@ -60,6 +62,7 @@ export interface OrderData {
   localPickup: boolean;
   shipBy: Date | null;
   lineItemIds?: string[];
+  sku?: string | null;
 }
 
 export interface Order extends OrderData {
@@ -72,6 +75,9 @@ export interface Order extends OrderData {
   shippedAt: Date | null;
   shippedBy: 'mom' | 'owner' | null;
   tracking: string | null;
+  sku: string | null;
+  /** Last error telling the marketplace it shipped (so a later tracking reply can retry). */
+  fulfillError: string | null;
 }
 
 const toItem = (r: any): Item => ({
@@ -110,6 +116,8 @@ const toOrder = (r: any): Order => ({
   shippedAt: r.shipped_at,
   shippedBy: r.shipped_by,
   tracking: r.tracking,
+  sku: r.sku ?? null,
+  fulfillError: r.fulfill_error ?? null,
 });
 
 export async function insertItem(
@@ -254,8 +262,8 @@ export async function insertOrderIfNew(
   d: OrderData,
 ): Promise<Order | null> {
   const { rows } = await db.query(
-    `INSERT INTO orders (platform, external_id, item_title, buyer, ship_to, local_pickup, ship_by, line_item_ids)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO orders (platform, external_id, item_title, buyer, ship_to, local_pickup, ship_by, line_item_ids, sku)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      ON CONFLICT (platform, external_id) DO NOTHING RETURNING *`,
     [
       platform,
@@ -266,6 +274,7 @@ export async function insertOrderIfNew(
       d.localPickup,
       d.shipBy,
       JSON.stringify(d.lineItemIds ?? []),
+      d.sku ?? null,
     ],
   );
   return rows[0] ? toOrder(rows[0]) : null;
@@ -321,6 +330,14 @@ export async function unshippedOrdersWithoutTelegram(db: Db): Promise<Order[]> {
     'SELECT * FROM orders WHERE telegram_message_id IS NULL AND shipped_at IS NULL ORDER BY id',
   );
   return rows.map(toOrder);
+}
+
+export async function setOrderTracking(db: Db, orderId: number, tracking: string): Promise<void> {
+  await db.query('UPDATE orders SET tracking = $2 WHERE id = $1', [orderId, tracking]);
+}
+
+export async function setOrderFulfillError(db: Db, orderId: number, error: string | null): Promise<void> {
+  await db.query('UPDATE orders SET fulfill_error = $2 WHERE id = $1', [orderId, error]);
 }
 
 export async function findOrderByExternal(db: Db, platform: Platform, externalId: string): Promise<Order | null> {

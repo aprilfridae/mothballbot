@@ -141,6 +141,21 @@ describe('postItem', () => {
     expect(log.changes).toEqual(['posting', 'live']);
   });
 
+  it("posts with the category's own condition wording", async () => {
+    const item = await readyItem();
+    const { deps, log } = makeDeps();
+    deps.ebay.suggestCategory = async () => ({
+      categoryId: '1',
+      requiredAspects: [],
+      conditions: [
+        { conditionId: '1000', conditionDescription: 'New' },
+        { conditionId: '3000', conditionDescription: 'Used' },
+      ],
+    });
+    await postItem(item.id, deps);
+    expect(log.listings[0].ebayCondition).toBe('USED_EXCELLENT');
+  });
+
   it('refuses to post without a price', async () => {
     const item = await readyItem(null);
     const { deps, log } = makeDeps();

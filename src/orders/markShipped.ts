@@ -52,6 +52,10 @@ export async function markShipped(
     result = 'shipped';
   } else if (tracking && !before.tracking && (await repo.setOrderTrackingIfMissing(deps.db, orderId, tracking))) {
     result = 'tracking-added';
+  } else if (tracking && before.fulfillError && tracking !== before.tracking) {
+    // The marketplace rejected the last attempt; a new tracking number gets another try.
+    await repo.setOrderTracking(deps.db, orderId, tracking);
+    result = 'tracking-added';
   } else {
     return 'already';
   }
@@ -60,6 +64,7 @@ export async function markShipped(
   // A new shipment always tells the platform; adding tracking later only matters when the carrier is known.
   const needsCall = result === 'shipped' || (tracking !== null && detectCarrier(tracking) !== null);
   const uploadError = needsCall ? await tellPlatform(order, tracking, deps) : null;
+  if (needsCall) await repo.setOrderFulfillError(deps.db, orderId, uploadError);
 
   const who = order.shippedBy === 'mom' ? 'Mom' : 'you';
   let discordLabel = `📦 Shipped (by ${who})`;

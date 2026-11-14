@@ -76,6 +76,12 @@ describe('createListing', () => {
     expect(f.calls.find((c) => c.method === 'PUT' && c.url.includes('/offer/OFF1'))?.body.pricingSummary.price.value).toBe('35.00');
   });
 
+  it('uses the category-specific condition when given', async () => {
+    const f = fakeFetch(listingRoutes());
+    await createListing(createEbay(cfg, f.fetch), cfg, { ...item, ebayCondition: 'PRE_OWNED_EXCELLENT' });
+    expect(f.calls[1].body.condition).toBe('PRE_OWNED_EXCELLENT');
+  });
+
   it('reuses the access token while it is valid', async () => {
     const f = fakeFetch(listingRoutes());
     const ebay = createEbay(cfg, f.fetch);
@@ -134,6 +140,10 @@ describe('suggestCategory', () => {
         () => json({ categorySuggestions: [{ category: { categoryId: '155183' } }, { category: { categoryId: '1' } }] }),
       ],
       [
+        'GET get_item_condition_policies',
+        () => json({ itemConditionPolicies: [{ categoryId: '155183', itemConditions: [{ conditionId: '1000', conditionDescription: 'New' }] }] }),
+      ],
+      [
         'GET get_item_aspects_for_category',
         () =>
           json({
@@ -146,7 +156,7 @@ describe('suggestCategory', () => {
       ],
     ]);
     const res = await suggestCategory(createEbay(cfg, f.fetch), 'mens hoodie');
-    expect(res).toEqual({ categoryId: '155183', requiredAspects: ['Brand', 'Size'] });
+    expect(res).toEqual({ categoryId: '155183', requiredAspects: ['Brand', 'Size'], conditions: [{ conditionId: '1000', conditionDescription: 'New' }] });
     expect(f.calls[1].url).toContain('/commerce/taxonomy/v1/category_tree/0/get_category_suggestions?q=mens+hoodie');
   });
 });
@@ -168,5 +178,17 @@ describe('uploadImage', () => {
     const url = await uploadImage(createEbay(cfg, f.fetch), { mime: 'image/jpeg', data: Buffer.from('x'), name: 'a.jpg' });
     expect(url).toBe('https://i.ebayimg.com/IMG1.jpg');
     expect(f.calls[1].body).toBeInstanceOf(FormData);
+  });
+});
+
+describe('suggestCategory without condition data', () => {
+  it('still works when the condition lookup fails', async () => {
+    const f = fakeFetch([
+      ['POST identity/v1/oauth2/token', () => tokenResponse()],
+      ['GET get_category_suggestions', () => json({ categorySuggestions: [{ category: { categoryId: '5' } }] })],
+      ['GET get_item_condition_policies', () => json({ errors: [{ message: 'nope' }] }, 403)],
+      ['GET get_item_aspects_for_category', () => json({ aspects: [] })],
+    ]);
+    expect(await suggestCategory(createEbay(cfg, f.fetch), 'x')).toEqual({ categoryId: '5', requiredAspects: [], conditions: null });
   });
 });

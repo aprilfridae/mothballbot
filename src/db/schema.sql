@@ -65,3 +65,7 @@ ALTER TABLE items ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'researc
 ALTER TABLE items ADD COLUMN IF NOT EXISTS research JSONB;
 ALTER TABLE items ADD COLUMN IF NOT EXISTS telegram_message_id BIGINT;
 ALTER TABLE items ALTER COLUMN price_cents DROP NOT NULL;
+
+-- Follow-ups: sale photo for Mom, retrying a failed tracking upload
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS sku TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS fulfill_error TEXT;

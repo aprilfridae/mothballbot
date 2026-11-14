@@ -142,6 +142,18 @@ describe('formatSaleForMom', () => {
     expect(text).toContain('Ship by: Mon, Nov 16');
   });
 
+  it('adds the country for orders shipping abroad', () => {
+    const text = formatSaleForMom({
+      platform: 'ebay',
+      itemTitle: 'Teacup',
+      buyer: 'k',
+      shipTo: { name: 'Kim', line1: '1 High St', city: 'Leeds', state: 'WYK', postalCode: 'LS1 1AA', country: 'GB' },
+      localPickup: false,
+      shipBy: null,
+    });
+    expect(text).toContain('Leeds, WYK LS1 1AA\nGB');
+  });
+
   it('says local pickup instead of an address', () => {
     const text = formatSaleForMom({ platform: 'facebook', itemTitle: 'Lamp', buyer: 'jo', shipTo: null, localPickup: true, shipBy: null });
     expect(text).toContain('Local pickup');

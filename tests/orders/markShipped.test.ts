@@ -98,4 +98,24 @@ describe('markShipped', () => {
     expect(log.telegram[0]).toContain("couldn't update eBay: Invalid tracking number");
     expect((await repo.getOrder(db, o.id))!.shippedBy).toBe('mom');
   });
+
+  it('lets Mom send tracking again after eBay rejected it, and clears the error once it works', async () => {
+    const o = await order();
+    const { d, log } = deps();
+    let fail = true;
+    d.fulfill.ebay = async (ord, tracking, carrier) => {
+      log.uploads.push({ id: ord.externalId, tracking, carrier });
+      if (fail) throw new Error('Invalid tracking number');
+    };
+    await markShipped(o.id, 'mom', '1Z999AA10123456784', d);
+    expect((await repo.getOrder(db, o.id))!.fulfillError).toBe('Invalid tracking number');
+
+    fail = false;
+    expect(await markShipped(o.id, 'mom', '9400111899223197428490', d)).toBe('tracking-added');
+    const after = (await repo.getOrder(db, o.id))!;
+    expect(after.tracking).toBe('9400111899223197428490');
+    expect(after.fulfillError).toBeNull();
+    expect(log.uploads.at(-1)).toEqual({ id: 'E1', tracking: '9400111899223197428490', carrier: 'USPS' });
+    expect(await markShipped(o.id, 'mom', '9400111899223197428490', d)).toBe('already');
+  });
 });

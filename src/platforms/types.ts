@@ -21,6 +21,7 @@ export interface PlatformOrder {
   localPickup: boolean;
   shipBy: Date | null;
   lineItemIds: string[];
+  sku: string | null;
 }
 
 /** What every marketplace connector provides. Etsy and Facebook implement this in later parts. */

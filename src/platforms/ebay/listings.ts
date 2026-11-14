@@ -1,6 +1,7 @@
 import type { ListingDraft } from '../../ai/draftListing.js';
 import type { Config } from '../../config.js';
 import { API, MEDIA_API, EbayError, type EbayClient } from './client.js';
+import type { CategoryCondition } from './conditions.js';
 
 export async function uploadImage(ebay: EbayClient, file: { mime: string; data: Buffer; name: string }): Promise<string> {
   const form = new FormData();
@@ -16,7 +17,7 @@ export async function uploadImage(ebay: EbayClient, file: { mime: string; data: 
 export async function suggestCategory(
   ebay: EbayClient,
   query: string,
-): Promise<{ categoryId: string; requiredAspects: string[] }> {
+): Promise<{ categoryId: string; requiredAspects: string[]; conditions: CategoryCondition[] | null }> {
   const base = `${API}/commerce/taxonomy/v1/category_tree/0`;
   const sugg = await ebay.request('GET', `${base}/get_category_suggestions?${new URLSearchParams({ q: query })}`);
   const categoryId: string | undefined = sugg?.categorySuggestions?.[0]?.category?.categoryId;
@@ -28,7 +29,22 @@ export async function suggestCategory(
   const requiredAspects = (aspects?.aspects ?? [])
     .filter((a: any) => a?.aspectConstraint?.aspectRequired)
     .map((a: any) => a.localizedAspectName as string);
-  return { categoryId, requiredAspects };
+  return { categoryId, requiredAspects, conditions: await categoryConditions(ebay, categoryId) };
+}
+
+/** Conditions this category accepts; null if eBay won't say (the draft's condition is then used as-is). */
+async function categoryConditions(ebay: EbayClient, categoryId: string): Promise<CategoryCondition[] | null> {
+  try {
+    const res = await ebay.request(
+      'GET',
+      `${API}/sell/metadata/v1/marketplace/EBAY_US/get_item_condition_policies?${new URLSearchParams({ filter: `categoryIds:{${categoryId}}` })}`,
+    );
+    const conditions = res?.itemConditionPolicies?.[0]?.itemConditions;
+    return Array.isArray(conditions) ? conditions : null;
+  } catch (e) {
+    if (e instanceof EbayError && e.isAuth) throw e;
+    return null;
+  }
 }
 
 async function findOfferId(ebay: EbayClient, sku: string): Promise<string | null> {
@@ -47,6 +63,8 @@ export interface EbayListingInput {
   draft: ListingDraft;
   imageUrls: string[];
   categoryId: string;
+  /** The category's own condition enum (see chooseCondition); defaults to the draft's. */
+  ebayCondition?: string;
 }
 
 export async function createListing(
@@ -60,7 +78,7 @@ export async function createListing(
 
   await ebay.request('PUT', `${API}/sell/inventory/v1/inventory_item/${encodeURIComponent(item.sku)}`, {
     availability: { shipToLocationAvailability: { quantity: 1 } },
-    condition: draft.condition,
+    condition: item.ebayCondition ?? draft.condition,
     product: {
       title: draft.title,
       description: draft.description,

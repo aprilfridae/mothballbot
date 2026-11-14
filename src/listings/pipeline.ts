@@ -4,6 +4,7 @@ import * as repo from '../db/repo.js';
 import type { Item, PriceResearch } from '../db/repo.js';
 import { EbayError } from '../platforms/ebay/client.js';
 import type { EbayListingInput } from '../platforms/ebay/listings.js';
+import { chooseCondition, type CategoryCondition } from '../platforms/ebay/conditions.js';
 import { readDraft } from './edit.js';
 
 export interface PipelineDeps {
@@ -13,7 +14,7 @@ export interface PipelineDeps {
   readPhoto: (path: string) => Promise<Buffer>;
   ebay: {
     uploadImage: (file: { mime: string; data: Buffer; name: string }) => Promise<string>;
-    suggestCategory: (query: string) => Promise<{ categoryId: string; requiredAspects: string[] }>;
+    suggestCategory: (query: string) => Promise<{ categoryId: string; requiredAspects: string[]; conditions?: CategoryCondition[] | null }>;
     createListing: (input: EbayListingInput) => Promise<{ listingId: string; url: string }>;
   };
   report: (text: string) => Promise<void>;
@@ -99,7 +100,7 @@ export async function postItem(itemId: number, deps: PipelineDeps): Promise<Post
   try {
     if (!stored) throw new Error("This listing doesn't have a draft yet.");
     const { draft } = stored;
-    const { categoryId, requiredAspects } = await deps.ebay.suggestCategory(draft.categoryQuery);
+    const { categoryId, requiredAspects, conditions } = await deps.ebay.suggestCategory(draft.categoryQuery);
     const missing = missingAspects(draft, requiredAspects);
     if (missing.length) {
       throw new EbayError(400, `eBay needs these item specifics: ${missing.join(', ')}. Tap Edit → Item specifics to add them.`, false);
@@ -115,6 +116,7 @@ export async function postItem(itemId: number, deps: PipelineDeps): Promise<Post
       draft: { ...draft, title: truncateTitle(draft.title) },
       imageUrls,
       categoryId,
+      ebayCondition: chooseCondition(draft.condition, conditions ?? null),
     });
     await repo.upsertListing(deps.db, itemId, 'ebay', { externalId: res.listingId, url: res.url, status: 'live', error: null });
     await repo.setItemStatus(deps.db, itemId, 'live');

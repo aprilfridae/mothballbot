@@ -20,11 +20,13 @@ function mapOrder(o: any): PlatformOrder {
           city: addr.city ?? '',
           state: addr.stateOrProvince ?? '',
           postalCode: addr.postalCode ?? '',
+          ...(addr.countryCode ? { country: addr.countryCode } : {}),
         }
       : null,
     localPickup: !addr,
     shipBy: shipByRaw ? new Date(shipByRaw) : null,
     lineItemIds: (o.lineItems ?? []).map((l: any) => l.lineItemId),
+    sku: o.lineItems?.find((l: any) => l.sku)?.sku ?? null,
   };
 }
 
@@ -32,7 +34,8 @@ export async function fetchNewOrders(ebay: EbayClient, since: Date): Promise<Pla
   const filter = `creationdate:[${since.toISOString()}..]`;
   const res = await ebay.request('GET', `${BASE}/order?${new URLSearchParams({ filter, limit: '50' })}`);
   return (res?.orders ?? [])
-    .filter((o: any) => o.cancelStatus?.cancelState !== 'CANCELED')
+    // Cancelled orders and ones already shipped (e.g. marked in eBay directly) need no announcement.
+    .filter((o: any) => o.cancelStatus?.cancelState !== 'CANCELED' && o.orderFulfillmentStatus !== 'FULFILLED')
     .map(mapOrder);
 }
 

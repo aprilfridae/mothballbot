@@ -1,6 +1,8 @@
 import { Bot, InlineKeyboard, InputFile, InputMediaBuilder } from 'grammy';
 import sharp from 'sharp';
+import { readFile } from 'node:fs/promises';
 import { deliverDraft } from '../listings/pending.js';
+import { salePhoto } from '../orders/sku.js';
 import type { Db } from '../db/db.js';
 import * as repo from '../db/repo.js';
 import type { Order, Platform, ShipTo } from '../db/repo.js';
@@ -39,7 +41,8 @@ async function momChatId(db: Db): Promise<number | null> {
 }
 
 export function formatAddress(a: ShipTo): string {
-  return [a.name, a.line1, a.line2, `${a.city}, ${a.state} ${a.postalCode}`].filter(Boolean).join('\n');
+  const country = a.country && a.country !== 'US' ? a.country : null;
+  return [a.name, a.line1, a.line2, `${a.city}, ${a.state} ${a.postalCode}`, country].filter(Boolean).join('\n');
 }
 
 export function formatShipBy(d: Date): string {
@@ -276,17 +279,36 @@ export function createMomBot(token: string, deps: MomDeps, listings: MomListingD
     async notifyMom(order) {
       const chatId = await momChatId(deps.db);
       if (chatId === null) return null;
-      const sent = await bot.api.sendMessage(chatId, formatSaleForMom(order), {
-        reply_markup: new InlineKeyboard().text('📦 Shipped', `ship:${order.id}`),
-      });
+      const keyboard = new InlineKeyboard().text('📦 Shipped', `ship:${order.id}`);
+      const text = formatSaleForMom(order);
+      // Show the item's photo with the sale when the bot listed it; fall back to text if that fails.
+      const photo = await salePhoto(deps.db, order.sku);
+      if (photo && text.length <= 1024) {
+        try {
+          const data = await sharp(await readFile(photo))
+            .rotate()
+            .resize({ width: 1280, height: 1280, fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: 85 })
+            .toBuffer();
+          const sent = await bot.api.sendPhoto(chatId, new InputFile(data, 'item.jpg'), { caption: text, reply_markup: keyboard });
+          return sent.message_id;
+        } catch (e) {
+          console.error('Sending the sale photo failed; sending text instead:', e);
+        }
+      }
+      const sent = await bot.api.sendMessage(chatId, text, { reply_markup: keyboard });
       return sent.message_id;
     },
     async markMessage(order, label) {
       const chatId = await momChatId(deps.db);
       if (chatId === null || order.telegramMessageId === null) return;
-      await bot.api.editMessageText(chatId, order.telegramMessageId, `${formatSaleForMom(order)}\n\n${label}`, {
-        reply_markup: new InlineKeyboard(),
-      });
+      const text = `${formatSaleForMom(order)}\n\n${label}`;
+      // Sale messages sent with a photo have a caption instead of text.
+      try {
+        await bot.api.editMessageText(chatId, order.telegramMessageId, text, { reply_markup: new InlineKeyboard() });
+      } catch {
+        await bot.api.editMessageCaption(chatId, order.telegramMessageId, { caption: text.slice(0, 1024), reply_markup: new InlineKeyboard() });
+      }
     },
     start(onError) {
       bot.start({ allowed_updates: ['message', 'callback_query'] }).catch(onError);
