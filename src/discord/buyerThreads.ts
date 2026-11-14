@@ -48,3 +48,46 @@ export async function mirrorMessages(db: Db, platform: Platform, msgs: PlatformM
     await repo.insertMessageIfNew(db, conv.id, m.messageExternalId, true, m.body, m.sentAt);
   }
 }
+
+export interface ReplyMessage {
+  id: string;
+  threadId: string;
+  authorId: string;
+  content: string;
+  react: (emoji: string) => Promise<void>;
+  reply: (text: string) => Promise<void>;
+}
+
+export interface ReplyDeps {
+  db: Db;
+  ownerId: string;
+  /** Per-platform senders: (conversationExternalId, text) → sent message id, if the platform returns one. */
+  send: Partial<Record<Platform, (conversationExternalId: string, text: string) => Promise<string | null>>>;
+}
+
+export async function handleThreadReply(m: ReplyMessage, deps: ReplyDeps): Promise<void> {
+  if (m.authorId !== deps.ownerId) return;
+  const conv = await repo.findConversationByThread(deps.db, m.threadId);
+  if (!conv) return;
+
+  const text = m.content.trim();
+  if (!text) {
+    await m.reply("Couldn't send: only text replies are supported for now.");
+    return;
+  }
+  const send = deps.send[conv.platform];
+  if (!send) {
+    await m.react('❌');
+    await m.reply(`Couldn't send: replying on ${PLATFORM_LABEL[conv.platform]} isn't set up yet.`);
+    return;
+  }
+
+  try {
+    const sentId = await send(conv.externalId, text);
+    await repo.insertMessageIfNew(deps.db, conv.id, sentId ?? `local:${m.id}`, false, text, new Date());
+    await m.react('✅');
+  } catch (e) {
+    await m.react('❌');
+    await m.reply(`Couldn't send: ${(e as Error).message}`);
+  }
+}

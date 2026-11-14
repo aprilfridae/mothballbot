@@ -63,3 +63,17 @@ describe('fetchNewMessages', () => {
     expect(msgs.map((m) => m.messageExternalId)).toEqual(['ebay:M1']);
   });
 });
+
+import { sendReply } from '../../../src/platforms/ebay/messages.js';
+
+describe('sendReply', () => {
+  it('sends text into the existing conversation and returns the prefixed message id', async () => {
+    const f = fakeFetch([
+      ['POST oauth2/token', () => tokenResponse()],
+      ['POST /commerce/message/v1/send_message', () => json({ messageId: 'M9' })],
+    ]);
+    const id = await sendReply(createEbay(creds, f.fetch), 'C1', 'Yes, still available!');
+    expect(id).toBe('ebay:M9');
+    expect(f.calls[1].body).toEqual({ conversationId: 'C1', messageText: 'Yes, still available!' });
+  });
+});

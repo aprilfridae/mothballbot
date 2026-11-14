@@ -48,3 +48,12 @@ export async function fetchNewMessages(ebay: EbayClient, sellerUsername: string,
   }
   return out.sort((a, b) => a.sentAt.getTime() - b.sentAt.getTime());
 }
+
+/** Sends a reply into an existing eBay conversation; returns the (prefixed) message id when eBay gives one. */
+export async function sendReply(ebay: EbayClient, conversationExternalId: string, text: string): Promise<string | null> {
+  const res = await ebay.request('POST', `${BASE}/send_message`, {
+    conversationId: conversationExternalId,
+    messageText: text,
+  });
+  return res?.messageId ? ebayMessageId(res.messageId) : null;
+}

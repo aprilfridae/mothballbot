@@ -89,3 +89,81 @@ describe('mirrorMessages', () => {
     expect(posts.map((p) => p.text)).toEqual([expect.stringContaining('again')]);
   });
 });
+
+import { handleThreadReply, type ReplyMessage } from '../../src/discord/buyerThreads.js';
+import * as repo from '../../src/db/repo.js';
+
+describe('handleThreadReply', () => {
+  function reply(over: Partial<ReplyMessage> = {}) {
+    const reactions: string[] = [];
+    const replies: string[] = [];
+    const m: ReplyMessage = {
+      id: 'd1',
+      threadId: 't1',
+      authorId: 'owner',
+      content: 'Yes, still available!',
+      react: async (e) => {
+        reactions.push(e);
+      },
+      reply: async (t) => {
+        replies.push(t);
+      },
+      ...over,
+    };
+    return { m, reactions, replies };
+  }
+
+  async function mapped() {
+    const conv = await repo.upsertConversation(db, 'ebay', 'C1', 'sam_92');
+    await repo.setConversationThread(db, conv.id, 't1');
+    return conv;
+  }
+
+  it('sends the owner reply to the right conversation, reacts ✅ and records it', async () => {
+    await mapped();
+    const sent: any[] = [];
+    const { m, reactions } = reply();
+    await handleThreadReply(m, {
+      db,
+      ownerId: 'owner',
+      send: { ebay: async (conv, text) => (sent.push({ conv, text }), 'ebay:M9') },
+    });
+    expect(sent).toEqual([{ conv: 'C1', text: 'Yes, still available!' }]);
+    expect(reactions).toEqual(['✅']);
+    expect(await repo.messageExists(db, 'ebay:M9')).toBe(true);
+  });
+
+  it("reacts ❌ and says why when the platform rejects the reply", async () => {
+    await mapped();
+    const { m, reactions, replies } = reply();
+    await handleThreadReply(m, {
+      db,
+      ownerId: 'owner',
+      send: {
+        ebay: async () => {
+          throw new Error('Conversation not found');
+        },
+      },
+    });
+    expect(reactions).toEqual(['❌']);
+    expect(replies).toEqual(["Couldn't send: Conversation not found"]);
+  });
+
+  it('ignores threads that are not buyer conversations and non-owners', async () => {
+    await mapped();
+    let calls = 0;
+    const deps = { db, ownerId: 'owner', send: { ebay: async () => (calls++, null) } };
+    await handleThreadReply(reply({ threadId: 'other' }).m, deps);
+    await handleThreadReply(reply({ authorId: 'stranger' }).m, deps);
+    expect(calls).toBe(0);
+  });
+
+  it('ignores empty messages such as image-only posts', async () => {
+    await mapped();
+    let calls = 0;
+    const { m, replies } = reply({ content: '   ' });
+    await handleThreadReply(m, { db, ownerId: 'owner', send: { ebay: async () => (calls++, null) } });
+    expect(calls).toBe(0);
+    expect(replies[0]).toContain('only text');
+  });
+});
