@@ -18,7 +18,7 @@ const DraftSchema = z.object({
 export type ListingDraft = z.infer<typeof DraftSchema>;
 
 export interface AnthropicLike {
-  messages: { create: (req: any) => Promise<{ content: Array<{ type: string; text?: string }> }> };
+  messages: { create: (req: any) => Promise<{ content: Array<{ type: string; text?: string }>; stop_reason?: string | null }> };
 }
 
 export class DraftError extends Error {}
