@@ -1,6 +1,9 @@
-export type IntakeResult = { ok: true; title: string; priceCents: number } | { ok: false; hint: string };
+export type IntakeResult =
+  | { ok: true; title: string; details: string; priceCents: number | null }
+  | { ok: false; hint: string };
 
-const HINT = 'Send photos with a title and price, like: `Nike hoodie size L $35`';
+const HINT =
+  'Send photos with what the item is on the first line, then any details (maker, pattern, era, marks, flaws). Add a backstamp photo if there is one. A price like `$35` is optional.';
 
 const DOLLAR_PRICE = /\$\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(?!\d)/;
 const TRAILING_NUMBER = /(?:^|\s)(\d+)(?:\.(\d{1,2}))?\s*$/;
@@ -19,16 +22,30 @@ export function parsePrice(text: string): number | null {
   return cents > 0 ? cents : null;
 }
 
+function stripMatch(text: string, m: RegExpMatchArray): string {
+  return (text.slice(0, m.index!) + ' ' + text.slice(m.index! + m[0].length)).replace(/[ \t]+/g, ' ').trim();
+}
+
+/**
+ * First line = what the item is; everything = details for the AI. A `$` price anywhere is taken as the owner's
+ * price; a bare trailing number only counts on the first line (so "marked 1952" on line 2 is not a price).
+ */
 export function parseIntake(text: string): IntakeResult {
   const trimmed = text.trim();
-  const match = trimmed.match(DOLLAR_PRICE) ?? trimmed.match(TRAILING_NUMBER);
-  if (!match || match.index === undefined) return { ok: false, hint: HINT };
+  const lines = trimmed.split('\n');
+  const first = lines[0] ?? '';
 
-  const priceCents = toCents(match[1], match[2]);
-  const title = (trimmed.slice(0, match.index) + ' ' + trimmed.slice(match.index + match[0].length))
-    .replace(/\s+/g, ' ')
-    .trim();
+  let details = trimmed;
+  let priceCents: number | null = null;
+  const dollar = trimmed.match(DOLLAR_PRICE);
+  const bare = dollar ? null : first.match(TRAILING_NUMBER);
+  const m = dollar ?? bare;
+  if (m && m.index !== undefined) {
+    priceCents = toCents(m[1], m[2]) || null;
+    details = stripMatch(trimmed, m);
+  }
 
-  if (!title || priceCents <= 0) return { ok: false, hint: HINT };
-  return { ok: true, title, priceCents };
+  const title = (details.split('\n')[0] ?? '').trim();
+  if (!title) return { ok: false, hint: HINT };
+  return { ok: true, title, details, priceCents };
 }

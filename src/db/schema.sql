@@ -58,3 +58,10 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- Part 1b: Mom approves listings on Telegram, with AI price research
+ALTER TABLE items ADD COLUMN IF NOT EXISTS details TEXT NOT NULL DEFAULT '';
+ALTER TABLE items ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'researching';
+ALTER TABLE items ADD COLUMN IF NOT EXISTS research JSONB;
+ALTER TABLE items ADD COLUMN IF NOT EXISTS telegram_message_id BIGINT;
+ALTER TABLE items ALTER COLUMN price_cents DROP NOT NULL;

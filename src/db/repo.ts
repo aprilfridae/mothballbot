@@ -2,13 +2,28 @@ import type { Db } from './db.js';
 
 export type Platform = 'ebay' | 'etsy' | 'facebook';
 
+export type ItemStatus = 'researching' | 'awaiting_mom' | 'posting' | 'live' | 'rejected' | 'error';
+
+export interface PriceResearch {
+  suggestedCents: number | null;
+  lowCents: number | null;
+  highCents: number | null;
+  confidence: 'low' | 'medium' | 'high';
+  comparables: { title: string; priceCents: number; sold: boolean; site: string; url: string }[];
+  reasoning: string;
+}
+
 export interface Item {
   id: number;
   title: string;
-  priceCents: number;
+  details: string;
+  priceCents: number | null;
   photos: string[];
   draft: unknown | null;
+  status: ItemStatus;
+  research: PriceResearch | null;
   discordMessageId: string | null;
+  telegramMessageId: number | null;
 }
 
 export interface ListingRow {
@@ -60,10 +75,14 @@ export interface Order extends OrderData {
 const toItem = (r: any): Item => ({
   id: r.id,
   title: r.title,
+  details: r.details,
   priceCents: r.price_cents,
   photos: r.photos,
   draft: r.draft,
+  status: r.status,
+  research: r.research,
   discordMessageId: r.discord_message_id,
+  telegramMessageId: r.telegram_message_id === null ? null : Number(r.telegram_message_id),
 });
 
 const toConversation = (r: any): Conversation => ({
@@ -93,11 +112,11 @@ const toOrder = (r: any): Order => ({
 
 export async function insertItem(
   db: Db,
-  i: { title: string; priceCents: number; photos: string[] },
+  i: { title: string; details: string; priceCents: number | null; photos: string[] },
 ): Promise<Item> {
   const { rows } = await db.query(
-    'INSERT INTO items (title, price_cents, photos) VALUES ($1, $2, $3) RETURNING *',
-    [i.title, i.priceCents, JSON.stringify(i.photos)],
+    'INSERT INTO items (title, details, price_cents, photos) VALUES ($1, $2, $3, $4) RETURNING *',
+    [i.title, i.details, i.priceCents, JSON.stringify(i.photos)],
   );
   return toItem(rows[0]);
 }
@@ -111,12 +130,42 @@ export async function updateItemDraft(db: Db, id: number, draft: unknown): Promi
   await db.query('UPDATE items SET draft = $2 WHERE id = $1', [id, JSON.stringify(draft)]);
 }
 
-export async function updateItemPrice(db: Db, id: number, priceCents: number): Promise<void> {
+export async function updateItemPrice(db: Db, id: number, priceCents: number | null): Promise<void> {
   await db.query('UPDATE items SET price_cents = $2 WHERE id = $1', [id, priceCents]);
 }
 
 export async function setItemDiscordMessage(db: Db, id: number, messageId: string): Promise<void> {
   await db.query('UPDATE items SET discord_message_id = $2 WHERE id = $1', [id, messageId]);
+}
+
+export async function setItemStatus(db: Db, id: number, status: ItemStatus): Promise<void> {
+  await db.query('UPDATE items SET status = $2 WHERE id = $1', [id, status]);
+}
+
+/** Atomically moves an item to `to` only if it is currently in one of `from`; false if someone else got there first. */
+export async function transitionItemStatus(db: Db, id: number, from: ItemStatus[], to: ItemStatus): Promise<boolean> {
+  const { rowCount } = await db.query('UPDATE items SET status = $3 WHERE id = $1 AND status = ANY($2)', [id, from, to]);
+  return rowCount === 1;
+}
+
+export async function setItemResearch(db: Db, id: number, research: PriceResearch): Promise<void> {
+  await db.query('UPDATE items SET research = $2 WHERE id = $1', [id, JSON.stringify(research)]);
+}
+
+export async function setItemTelegramMessage(db: Db, id: number, messageId: number): Promise<void> {
+  await db.query('UPDATE items SET telegram_message_id = $2 WHERE id = $1', [id, messageId]);
+}
+
+export async function findItemByTelegramMessage(db: Db, messageId: number): Promise<Item | null> {
+  const { rows } = await db.query('SELECT * FROM items WHERE telegram_message_id = $1', [messageId]);
+  return rows[0] ? toItem(rows[0]) : null;
+}
+
+export async function itemsAwaitingMomWithoutTelegram(db: Db): Promise<Item[]> {
+  const { rows } = await db.query(
+    "SELECT * FROM items WHERE status = 'awaiting_mom' AND telegram_message_id IS NULL ORDER BY id",
+  );
+  return rows.map(toItem);
 }
 
 export async function upsertListing(
