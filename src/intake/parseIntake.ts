@@ -11,6 +11,14 @@ function toCents(whole: string, fraction: string | undefined): number {
   return dollars * 100 + cents;
 }
 
+/** Parses a standalone price like "35", "$35.50" or "$1,200"; null if it isn't one. */
+export function parsePrice(text: string): number | null {
+  const m = text.trim().match(/^\$?\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?$/);
+  if (!m) return null;
+  const cents = toCents(m[1], m[2]);
+  return cents > 0 ? cents : null;
+}
+
 export function parseIntake(text: string): IntakeResult {
   const trimmed = text.trim();
   const match = trimmed.match(DOLLAR_PRICE) ?? trimmed.match(TRAILING_NUMBER);
